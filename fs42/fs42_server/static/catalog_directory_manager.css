@@ -35,6 +35,14 @@ button.cdm-entry, .cdm-entry-open { cursor: pointer; }
 .cdm-link-action button:disabled { cursor: not-allowed; opacity: .55; }
 .cdm-message { min-height: 1.4em; margin: .5rem 0; color: #267342; }
 .cdm-message.is-error { color: #b3261e; }
+.cdm-modal { position: fixed; inset: 0; z-index: 11000; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.cdm-modal[hidden] { display: none; }
+.cdm-modal-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .72); }
+.cdm-modal-card { position: relative; width: min(100%, 440px); display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid rgba(255, 255, 255, .2); border-radius: 8px; background: #161b22; color: #e6e6e6; box-shadow: 0 12px 36px rgba(0, 0, 0, .45); }
+.cdm-modal-card label { display: grid; gap: .35rem; }
+.cdm-modal-heading, .cdm-modal-actions { display: flex; align-items: center; justify-content: space-between; gap: .6rem; }
+.cdm-modal-heading h2 { margin: 0; }
+.cdm-modal-actions { justify-content: flex-end; }
 @media (max-width: 600px) {
     .cdm-page { padding: .65rem; }
     .cdm-panel { padding: .7rem; }

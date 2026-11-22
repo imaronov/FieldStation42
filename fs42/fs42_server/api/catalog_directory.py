@@ -217,6 +217,7 @@ async def browse_catalog(path: str = ""):
                             "name": entry.name,
                             "type": "link",
                             "target": os.readlink(entry.path),
+                            "is_directory": os.path.isdir(entry.path),
                         })
                     elif entry.is_dir(follow_symlinks=False):
                         entries.append({"name": entry.name, "type": "directory"})
