@@ -233,7 +233,7 @@ async def show_guide(request:Request):
 
 
 WEB_KEYS = {
-    "PageUp", "PageDown", "Enter", "NavLeft", "NavRight",
+    "PageUp", "PageDown", "Enter", "Escape", "NavLeft", "NavRight",
     "Space", "Backspace", "Clear",
     *"ABCDEFGHIJKLMNOPQRSTUVWXYZ",
     *"0123456789",

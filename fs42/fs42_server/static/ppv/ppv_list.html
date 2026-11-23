@@ -493,6 +493,15 @@
 					// The remote injects untrusted key events; hardware keyboards use native controls.
 					if (event.isTrusted) return;
 					if (
+						event.key === 'Escape' &&
+						remoteKeyboard &&
+						!remoteKeyboard.hidden
+					) {
+						event.preventDefault();
+						closeRemoteKeyboard();
+						return;
+					}
+					if (
 						searchable &&
 						([...event.key].length === 1 ||
 							['Backspace', 'Clear'].includes(event.key))
@@ -528,6 +537,10 @@
 						return;
 					}
 					switch (event.key) {
+						case 'Escape':
+							event.preventDefault();
+							setRemoteControlFocus(-1);
+							break;
 						case 'NavLeft':
 							event.preventDefault();
 							moveRemoteControlFocus(-1);

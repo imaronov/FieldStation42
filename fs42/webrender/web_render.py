@@ -189,7 +189,7 @@ class WebRenderApp(QApplication):
             if isinstance(msg, str) and msg.startswith("key:"):
                 key_name = msg[4:]
                 if key_name not in {
-                    "PageUp", "PageDown", "Enter", "NavLeft", "NavRight",
+                    "PageUp", "PageDown", "Enter", "Escape", "NavLeft", "NavRight",
                     "Space", "Backspace", "Clear", *"ABCDEFGHIJKLMNOPQRSTUVWXYZ",
                     *"0123456789",
                     "Apostrophe", "Comma", "Hyphen", "Period", "Slash",

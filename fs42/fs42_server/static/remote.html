@@ -2,7 +2,10 @@
 <html lang="en">
 	<head>
 		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+		<meta
+			name="viewport"
+			content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+		/>
 		<title>Remote Control - FieldStation42</title>
 		<link
 			rel="stylesheet"
@@ -112,6 +115,21 @@
 			.nav-pad .remote-keyboard-btn {
 				grid-column: 3;
 				grid-row: 3;
+			}
+			.nav-pad .nav-back {
+				grid-column: 1;
+				grid-row: 1;
+				font-size: 11px;
+			}
+			.nav-back-symbol {
+				display: block;
+				font-size: 24px;
+				line-height: 1;
+			}
+			.nav-keyboard-symbol {
+				display: block;
+				font-size: 34px;
+				line-height: 1;
 			}
 			.playback-timeline {
 				box-sizing: border-box;
@@ -281,6 +299,14 @@
 			<!-- Nav Pad - swaps in for the number pad to drive web channels (guide, PPV). -->
 			<div class="button-grid nav-pad" id="nav-pad" hidden>
 				<button class="remote-btn nav-btn nav-up" data-key="nav_up">▲</button>
+				<button
+					class="remote-btn nav-btn nav-back"
+					data-key="nav_back"
+					aria-label="Back"
+					title="Back"
+				>
+					<span class="nav-back-symbol">⏎</span>
+				</button>
 				<button class="remote-btn nav-btn nav-left" data-key="nav_left">
 					◀
 				</button>
@@ -296,8 +322,13 @@
 				<button class="remote-btn nav-btn nav-down" data-key="nav_down">
 					▼
 				</button>
-				<button class="remote-btn nav-btn remote-keyboard-btn" data-key="type_keyboard" aria-label="Open phone keyboard" title="Open phone keyboard">
-					⌨
+				<button
+					class="remote-btn nav-btn remote-keyboard-btn"
+					data-key="type_keyboard"
+					aria-label="Open phone keyboard"
+					title="Open phone keyboard"
+				>
+					<span class="nav-keyboard-symbol">⌨</span>
 				</button>
 				<div
 					class="button-grid playback-section"
@@ -341,7 +372,15 @@
 					</button>
 				</div>
 			</div>
-			<input id="remote-typing-input" type="text" aria-label="Type a PPV movie search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+			<input
+				id="remote-typing-input"
+				type="text"
+				aria-label="Type a PPV movie search"
+				autocomplete="off"
+				autocorrect="off"
+				autocapitalize="off"
+				spellcheck="false"
+			/>
 
 			<!-- Volume and Channel Controls in Vertical Columns -->
 			<div class="button-grid volume-channel-section">
@@ -425,9 +464,16 @@
 			let remoteTypingQueue = Promise.resolve();
 			function remoteKeyForCharacter(character) {
 				const specialKeys = {
-					' ': 'Space', "'": 'Apostrophe', ',': 'Comma', '-': 'Hyphen',
-					'.': 'Period', '/': 'Slash', ':': 'Colon', ';': 'Semicolon',
-					'?': 'Question', '!': 'Exclamation',
+					' ': 'Space',
+					"'": 'Apostrophe',
+					',': 'Comma',
+					'-': 'Hyphen',
+					'.': 'Period',
+					'/': 'Slash',
+					':': 'Colon',
+					';': 'Semicolon',
+					'?': 'Question',
+					'!': 'Exclamation',
 				};
 				if (specialKeys[character]) return specialKeys[character];
 				if (/^[a-z0-9]$/i.test(character)) return character.toUpperCase();
@@ -443,9 +489,11 @@
 					prefixLength < lastRemoteTypingValue.length &&
 					prefixLength < value.length &&
 					lastRemoteTypingValue[prefixLength] === value[prefixLength]
-				) prefixLength++;
+				)
+					prefixLength++;
 				const toSend = [];
-				for (let i = prefixLength; i < lastRemoteTypingValue.length; i++) toSend.push('Backspace');
+				for (let i = prefixLength; i < lastRemoteTypingValue.length; i++)
+					toSend.push('Backspace');
 				for (const character of value.slice(prefixLength)) {
 					const keyName = remoteKeyForCharacter(character);
 					if (keyName) toSend.push(keyName);
@@ -1064,6 +1112,9 @@
 						break;
 					case 'nav_right':
 						await sendNavKey('NavRight', 'RIGHT');
+						break;
+					case 'nav_back':
+						await sendNavKey('Escape', 'BACK');
 						break;
 					case 'nav_enter':
 						await sendNavKey('Enter', 'SELECT');
