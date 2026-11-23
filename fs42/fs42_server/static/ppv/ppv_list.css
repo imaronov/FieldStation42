@@ -22,7 +22,7 @@ body {
 .page {
 	display: grid;
 	grid-template-columns: minmax(320px, 42%) 1fr;
-	grid-template-rows: auto minmax(0, 1fr);
+	grid-template-rows: auto auto minmax(0, 1fr);
 	height: 100%;
 }
 
@@ -56,8 +56,13 @@ body {
 
 .list-tools {
 	display: grid;
-	gap: 7px;
-	margin-top: 9px;
+	grid-column: 1 / -1;
+	grid-template-columns: minmax(120px, 1.25fr) repeat(3, minmax(90px, 1fr));
+	align-items: center;
+	gap: 8px;
+	padding: 8px 30px;
+	background: #0b131a;
+	border-bottom: 2px solid #324756;
 }
 
 .list-tools[hidden] {
@@ -82,9 +87,7 @@ body {
 }
 
 .list-tool-selects {
-	display: grid;
-	grid-template-columns: 1fr 1.2fr 1.1fr;
-	gap: 5px;
+	display: contents;
 }
 
 header {
@@ -113,12 +116,12 @@ h1 {
 }
 
 .page.crt:not(.resolution-1080i) .list-panel > header {
-	padding: 8px;
+	padding: 6px 8px;
 }
 
 .page.crt:not(.resolution-1080i) .list-tools {
-	gap: 4px;
-	margin-top: 5px;
+	gap: 5px;
+	padding: 5px 8px;
 }
 
 .page.crt:not(.resolution-1080i) .list-tools input,
@@ -181,6 +184,11 @@ h1 {
 	overflow-y: auto;
 	padding: clamp(24px, 6vw, 80px);
 	padding-right: clamp(40px, 8vw, 100px);
+}
+
+.details.remote-focused {
+	outline: 3px solid #ffd84d;
+	outline-offset: -3px;
 }
 
 #poster {
@@ -319,10 +327,15 @@ h1 {
 		padding: 10px 8px;
 	}
 	.list-tool-selects {
-		grid-template-columns: 1fr 1fr;
+		display: contents;
+	}
+	.list-tools {
+		grid-template-columns: minmax(70px, 1.2fr) repeat(3, minmax(0, 1fr));
+		gap: 4px;
+		padding: 6px 8px;
 	}
 	#movie-sort {
-		grid-column: 1 / -1;
+		grid-column: auto;
 	}
 	.remote-keyboard-panel {
 		padding: 9px;
