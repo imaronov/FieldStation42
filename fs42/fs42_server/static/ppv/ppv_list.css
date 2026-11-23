@@ -91,13 +91,14 @@ body {
 }
 
 header {
-	padding: 26px 30px 18px;
+	padding: 2.5px 0px;
 	background: #0b131a;
 	border-bottom: 2px solid #324756;
 }
 
 .channel-header {
 	grid-column: 1 / -1;
+	padding: 5px;
 	text-align: center;
 }
 
