@@ -88,6 +88,22 @@
 				min-height: 0;
 				justify-self: center;
 			}
+			#remote-typing-input {
+				position: fixed;
+				left: 8px;
+				bottom: 8px;
+				z-index: 2;
+				width: 2px;
+				height: 2px;
+				padding: 0;
+				border: 0;
+				opacity: 0.01;
+				font-size: 16px;
+			}
+			.nav-pad .remote-keyboard-btn {
+				grid-column: 3;
+				grid-row: 3;
+			}
 			.playback-timeline {
 				box-sizing: border-box;
 				width: min(320px, calc(100% - 32px));
@@ -271,6 +287,9 @@
 				<button class="remote-btn nav-btn nav-down" data-key="nav_down">
 					▼
 				</button>
+				<button class="remote-btn nav-btn remote-keyboard-btn" data-key="type_keyboard" aria-label="Open phone keyboard" title="Open phone keyboard">
+					⌨
+				</button>
 				<div
 					class="button-grid playback-section"
 					id="playback-controls"
@@ -313,6 +332,7 @@
 					</button>
 				</div>
 			</div>
+			<input id="remote-typing-input" type="text" aria-label="Type a PPV movie search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
 
 			<!-- Volume and Channel Controls in Vertical Columns -->
 			<div class="button-grid volume-channel-section">
@@ -391,6 +411,49 @@
 			const numberPad = document.getElementById('number-pad');
 			const navPad = document.getElementById('nav-pad');
 			const playbackControls = document.getElementById('playback-controls');
+			const remoteTypingInput = document.getElementById('remote-typing-input');
+			let lastRemoteTypingValue = '';
+			let remoteTypingQueue = Promise.resolve();
+			function remoteKeyForCharacter(character) {
+				const specialKeys = {
+					' ': 'Space', "'": 'Apostrophe', ',': 'Comma', '-': 'Hyphen',
+					'.': 'Period', '/': 'Slash', ':': 'Colon', ';': 'Semicolon',
+					'?': 'Question', '!': 'Exclamation',
+				};
+				if (specialKeys[character]) return specialKeys[character];
+				if (/^[a-z0-9]$/i.test(character)) return character.toUpperCase();
+				return null;
+			}
+			remoteTypingInput.addEventListener('focus', () => {
+				lastRemoteTypingValue = remoteTypingInput.value;
+			});
+			remoteTypingInput.addEventListener('input', () => {
+				const value = remoteTypingInput.value;
+				let prefixLength = 0;
+				while (
+					prefixLength < lastRemoteTypingValue.length &&
+					prefixLength < value.length &&
+					lastRemoteTypingValue[prefixLength] === value[prefixLength]
+				) prefixLength++;
+				const toSend = [];
+				for (let i = prefixLength; i < lastRemoteTypingValue.length; i++) toSend.push('Backspace');
+				for (const character of value.slice(prefixLength)) {
+					const keyName = remoteKeyForCharacter(character);
+					if (keyName) toSend.push(keyName);
+				}
+				lastRemoteTypingValue = value;
+				if (!toSend.length) return;
+				remoteTypingQueue = remoteTypingQueue
+					.then(async () => {
+						for (const keyName of toSend) {
+							await window.fs42Api.post(`player/web/key/${keyName}`);
+						}
+					})
+					.catch((error) => {
+						console.error('Text input failed:', error);
+						display.textContent = 'TYPE ERROR';
+					});
+			});
 			const stationPpvCache = new Map();
 			let ppvVideoPlaying = false;
 			let ppvVideoPaused = false;
@@ -995,6 +1058,9 @@
 						break;
 					case 'nav_enter':
 						await sendNavKey('Enter', 'SELECT');
+						break;
+					case 'type_keyboard':
+						remoteTypingInput.focus({ preventScroll: true });
 						break;
 					case 'playback_prev':
 						await sendPpvPlaybackControl('rewind', 'REWIND');
