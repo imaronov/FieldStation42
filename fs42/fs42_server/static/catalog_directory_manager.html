@@ -50,6 +50,7 @@
 					<div class="cdm-browser-tools">
 						<button id="source-up" class="pure-button">Up</button
 						><button id="source-refresh" class="pure-button">Refresh</button
+						><button id="check-tmdb" class="pure-button">Check MovieDB</button
 						><button id="export-to-drive" class="pure-button">
 							Export links here</button
 						><span id="source-selection">No media selected</span>
@@ -431,6 +432,44 @@
 					loadSource();
 				};
 				$('source-refresh').onclick = loadSource;
+				$('check-tmdb').onclick = async () => {
+					if (!state.mount) {
+						message('Select a mounted drive first.', true);
+						return;
+					}
+					if (state.selectedSources.size > 1) {
+						message('Select only one file or directory to check with MovieDB.', true);
+						return;
+					}
+					const path = state.selectedSources.size
+						? Array.from(state.selectedSources)[0]
+						: state.sourcePath;
+					if (!path) {
+						message('Open a media directory or select one item first.', true);
+						return;
+					}
+					const button = $('check-tmdb');
+					button.disabled = true;
+					message('Checking MovieDB…');
+					try {
+						const result = await request('post', 'catalog-directory/tmdb/check', {
+							mount: state.mount,
+							path,
+						});
+						if (!result.match) {
+							message(`No MovieDB match found for “${result.query}”.`, true);
+							return;
+						}
+						const type = result.match.media_type === 'tv' ? 'TV show' : 'Movie';
+						const year = (result.match.release_date || '').slice(0, 4);
+						message(
+							`MovieDB match: ${result.match.title}${year ? ` (${year})` : ''} — ${type}, TMDB ID ${result.match.tmdb_id}.`,
+						);
+					} catch (_) {
+					} finally {
+						button.disabled = false;
+					}
+				};
 				$('export-to-drive').onclick = async () => {
 					if (!state.mount) {
 						message('Select a mounted drive first.', true);

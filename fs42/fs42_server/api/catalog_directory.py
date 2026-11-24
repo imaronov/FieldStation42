@@ -2,12 +2,14 @@ import errno
 import json
 import os
 import re
+import xml.etree.ElementTree as ET
 from pathlib import PurePosixPath
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from fs42.fs42_server.api.media import AUDIO_EXTENSIONS, PROJECT_ROOT, VIDEO_EXTENSIONS
+from .tmdb_helper import get_tmdb_helper
 
 router = APIRouter(prefix="/catalog-directory", tags=["catalog-directory"])
 
@@ -57,6 +59,11 @@ class DriveCatalogFileRequest(BaseModel):
     mount: str
     path: str = ""
     filename: str
+
+
+class CheckTMDBRequest(BaseModel):
+    mount: str
+    path: str
 
 
 def _inside(path, root):
@@ -201,6 +208,125 @@ async def browse_source(mount: str, path: str = ""):
         raise HTTPException(status_code=403, detail="Permission denied while reading this drive.")
     entries.sort(key=lambda entry: (entry["type"] != "directory", entry["name"].lower()))
     return {"path": relative_path.replace(os.sep, "/"), "entries": entries}
+
+
+@router.post("/tmdb/check")
+def check_source_with_tmdb(request: CheckTMDBRequest):
+    """Look up one mounted-drive file or directory without exposing the API key."""
+    mount_root, source, relative_path = _source_path(request.mount, request.path)
+    if not relative_path or not _inside(source, mount_root):
+        raise HTTPException(
+            status_code=400,
+            detail="Choose a media file or directory on the mounted drive.",
+        )
+    if not os.path.isdir(source):
+        raise HTTPException(
+            status_code=400,
+            detail="Choose a TV show directory on the mounted drive.",
+        )
+
+    name = os.path.basename(os.path.normpath(source))
+    title = name
+    helper = get_tmdb_helper()
+    if not helper.is_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="TMDB is not configured. Add tmdb_api_key to confs/main_config.json.",
+        )
+    match = helper.search_media(title)
+    if match is None:
+        return {
+            "path": relative_path.replace(os.sep, "/"),
+            "query": title,
+            "match": None,
+            "files": None,
+        }
+    if match.get("media_type") != "tv":
+        raise HTTPException(
+            status_code=409,
+            detail=f"TMDB matched '{match.get('title')}' as a movie, not a TV show.",
+        )
+
+    details = helper.get_tv_details(match["tmdb_id"])
+    if not details:
+        raise HTTPException(status_code=502, detail="Could not retrieve the TMDB TV show details.")
+    poster_data = None
+    poster_destination = os.path.join(source, "poster.jpg")
+    if not os.path.exists(poster_destination):
+        poster_data = helper.download_poster(details.get("poster_path"))
+        if poster_data is None:
+            raise HTTPException(status_code=502, detail="TMDB did not provide a downloadable show poster.")
+
+    root = ET.Element("tvshow")
+
+    def add_element(tag, value, attributes=None):
+        if value in (None, ""):
+            return
+        element = ET.SubElement(root, tag, attributes or {})
+        element.text = str(value)
+
+    first_air_date = details.get("first_air_date") or ""
+    add_element("title", details.get("name") or match.get("title"))
+    add_element("originaltitle", details.get("original_name"))
+    add_element("year", first_air_date[:4])
+    add_element("premiered", first_air_date)
+    add_element("plot", details.get("overview"))
+    for genre in details.get("genres", []):
+        if isinstance(genre, dict):
+            add_element("genre", genre.get("name"))
+    ratings = details.get("content_ratings", {}).get("results", [])
+    us_rating = next(
+        (
+            rating.get("rating")
+            for rating in ratings
+            if rating.get("iso_3166_1") == "US" and rating.get("rating")
+        ),
+        "",
+    )
+    add_element("mpaa", us_rating)
+    add_element("status", details.get("status"))
+    for network in details.get("networks", []):
+        if isinstance(network, dict):
+            add_element("studio", network.get("name"))
+    add_element("season", details.get("number_of_seasons"))
+    add_element("episode", details.get("number_of_episodes"))
+    add_element("rating", details.get("vote_average"))
+    add_element("votes", details.get("vote_count"))
+    add_element("uniqueid", details.get("id"), {"type": "tmdb", "default": "true"})
+    nfo_data = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    nfo_destination = os.path.join(source, "tvshow.nfo")
+    created = []
+    existing = []
+    try:
+        if os.path.exists(nfo_destination):
+            existing.append("tvshow.nfo")
+        else:
+            with open(nfo_destination, "xb") as fp:
+                fp.write(nfo_data)
+            created.append("tvshow.nfo")
+        if os.path.exists(poster_destination):
+            existing.append("poster.jpg")
+        else:
+            with open(poster_destination, "xb") as fp:
+                fp.write(poster_data)
+            created.append("poster.jpg")
+    except FileExistsError as exc:
+        existing.append(os.path.basename(exc.filename))
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Permission denied while writing {os.path.basename(exc.filename)}.",
+        ) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not write TV show metadata: {exc}") from exc
+
+    return {
+        "path": relative_path.replace(os.sep, "/"),
+        "query": title,
+        "match": match,
+        "files": {"created": created, "existing": existing},
+    }
 
 
 @router.get("/catalog")
