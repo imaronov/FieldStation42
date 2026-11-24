@@ -528,6 +528,21 @@
 		}
 	}
 
+	let episodeRuntimeObserver;
+
+	async function showEpisodeRuntime(info, episode) {
+		if (!episode.runtime_url) return;
+		episode.runtimeRequest ??= fetch(episode.runtime_url)
+			.then((response) => response.ok ? response.json() : null)
+			.catch(() => null);
+		const runtime = await episode.runtimeRequest;
+		if (Number.isInteger(runtime?.minutes) && runtime.minutes > 0) {
+			info.textContent += ` • ${runtime.minutes} min`;
+		} else {
+			delete episode.runtimeRequest;
+		}
+	}
+
 	function renderShowDetails() {
 		if (!openShow) return;
 		detailItem = null;
@@ -562,15 +577,32 @@
 			seasonTabs.appendChild(button);
 		});
 
+		episodeRuntimeObserver?.disconnect();
+		const runtimes = new Map();
+		episodeRuntimeObserver = new IntersectionObserver((entries, observer) => {
+			for (const { target, isIntersecting } of entries) {
+				if (!isIntersecting) continue;
+				observer.unobserve(target);
+				showEpisodeRuntime(target, runtimes.get(target));
+				runtimes.delete(target);
+			}
+		}, { root: episodeList });
 		episodeList.replaceChildren();
 		(season?.episodes || []).forEach((episode, index) => {
 			const row = document.createElement('div');
 			row.className = `episode${index === episodeIndex ? ' selected' : ''}`;
 			row.setAttribute('role', 'option');
 			row.setAttribute('aria-selected', String(index === episodeIndex));
-			row.innerHTML = `<div class="episode-number">${escapeHtml(episode.episode || index + 1)}</div><div><div class="episode-title"></div><div class="episode-info"></div></div><div>▶</div>`;
-			row.querySelector('.episode-title').textContent = episode.title;
-			row.querySelector('.episode-info').textContent = episode.description || episode.info || '';
+			row.innerHTML = '<div><div class="episode-title"></div><div class="episode-info"></div></div><div>▶</div>';
+			row.querySelector('.episode-title').textContent = `${episode.episode || index + 1}. ${episode.title}`;
+			const info = row.querySelector('.episode-info');
+			const seasonCode = String(episode.season ?? season?.season ?? 0).padStart(2, '0');
+			const episodeCode = String(episode.episode || index + 1).padStart(2, '0');
+			info.textContent = `S${seasonCode}E${episodeCode}`;
+			if (episode.runtime_url) {
+				runtimes.set(info, episode);
+				episodeRuntimeObserver.observe(info);
+			}
 			row.addEventListener('click', () => {
 				episodeIndex = index;
 				openItemDetails(episode);

@@ -323,7 +323,12 @@ button {
 .skeleton-card::after {
 	position: absolute;
 	inset: 0;
-	background: linear-gradient(100deg, transparent 25%, rgb(255 255 255 / 9%) 50%, transparent 75%);
+	background: linear-gradient(
+		100deg,
+		transparent 25%,
+		rgb(255 255 255 / 9%) 50%,
+		transparent 75%
+	);
 	content: '';
 	transform: translateX(-100%);
 	animation: skeleton-shimmer 1.35s infinite;
@@ -638,6 +643,9 @@ button {
 
 .season-tabs {
 	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	min-height: 58px;
 	gap: 8px;
 	overflow-x: hidden;
 	overflow-y: hidden;
@@ -658,6 +666,7 @@ button {
 .season-tab {
 	flex: 0 0 auto;
 	padding: 7px 12px;
+	line-height: 1.3;
 	border: 1px solid #555;
 	border-radius: 3px;
 	background: #252525;
@@ -678,7 +687,7 @@ button {
 
 .episode {
 	display: grid;
-	grid-template-columns: 42px 1fr auto;
+	grid-template-columns: minmax(0, 1fr) auto;
 	align-items: center;
 	gap: 12px;
 	padding: 10px 12px;
@@ -690,11 +699,6 @@ button {
 	border-color: #fff;
 	background: #333;
 	color: #fff;
-}
-.episode-number {
-	color: #aaa;
-	font-size: 1.05rem;
-	text-align: center;
 }
 .episode-title {
 	font-weight: 700;
@@ -915,30 +919,24 @@ button {
 	font-size: 8px;
 }
 .resolution-480i .season-tabs {
-	align-items: flex-start;
-	min-height: 44px;
-	padding: 5px 18px 12px;
+	min-height: 52px;
+	padding: 6px 18px;
 }
 .resolution-480i .season-tab {
 	padding: 6px 10px;
 	font-size: 12px;
-	line-height: 1.2;
 }
 .resolution-480i .episode-list {
 	padding: 0 18px;
 }
 .resolution-480i .episode {
-	grid-template-columns: 25px 1fr auto;
 	gap: 6px;
 	padding: 5px 6px;
 	font-size: 8px;
 }
-.resolution-480i .episode-number {
-	font-size: 9px;
-}
 .resolution-480i .episode-info,
 .resolution-480i .details-help {
-	font-size: 7px;
+	font-size: 10px;
 }
 .resolution-480i .episode-title {
 	font-size: 12px;

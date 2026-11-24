@@ -2,6 +2,9 @@ import logging
 import mimetypes
 import os
 import re
+import subprocess
+from functools import lru_cache
+from math import isfinite
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
@@ -156,6 +159,12 @@ def _episode_numbers(metadata, path):
     return season if isinstance(season, int) else 0, episode if isinstance(episode, int) else 0
 
 
+def _episode_title_from_filename(path):
+    stem = os.path.splitext(os.path.basename(path))[0]
+    normalized = re.fullmatch(r".+ \(\d{4}\) - S\d{1,3}E\d{1,3} - (.+)", stem, re.I)
+    return normalized[1] if normalized else stem
+
+
 def _scan_show_directory(channel_number, library, show_directory, loose_files=None):
     show_metadata = _read_tvshow_nfo(show_directory)
     show_title = show_metadata.get("title") or os.path.basename(os.path.normpath(show_directory))
@@ -181,7 +190,11 @@ def _scan_show_directory(channel_number, library, show_directory, loose_files=No
                 "show_title": metadata.get("show_title") or show_title,
                 "season": season_number,
                 "episode": episode_number,
-                "title": fields.get("title") or os.path.splitext(os.path.basename(path))[0],
+                "title": fields.get("title") or _episode_title_from_filename(path),
+                "runtime_url": (
+                    f"/media-browser/{channel_number}/runtime/{library['id']}/"
+                    + quote(os.path.relpath(path, library["path"]).replace(os.sep, "/"), safe="/")
+                ),
             }
         )
         seasons.setdefault(season_number, []).append(episode_item)
@@ -318,6 +331,45 @@ async def get_art(channel_number: int, library_id: str, image_path: str):
         media_type=media_type or "application/octet-stream",
         headers={"Cache-Control": "public, max-age=3600"},
     )
+
+
+@lru_cache(maxsize=2048)
+def _runtime_minutes(path, modified_ns, size):
+    # The file modification time and size invalidate cached results on replacement.
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-protocol_whitelist", "file",
+             "-format_whitelist", "mov,matroska,avi,asf,flv", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, check=True, timeout=5,
+        )
+        seconds = float(result.stdout.strip())
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return max(1, int(seconds / 60 + 0.5)) if isfinite(seconds) and seconds > 0 else None
+
+
+@router.get("/{channel_number}/runtime/{library_id}/{video_path:path}")
+def get_episode_runtime(channel_number: int, library_id: str, video_path: str):
+    station = StationManager().station_by_channel(channel_number)
+    library = next((entry for entry in configured_libraries(station or {})
+                    if entry["id"] == library_id and entry["kind"] == "shows"), None)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Show library not found")
+
+    root = os.path.abspath(library["path"])
+    candidate = os.path.abspath(os.path.join(root, video_path))
+    try:
+        is_inside_library = os.path.commonpath((root, candidate)) == root
+    except ValueError:
+        is_inside_library = False
+    if not is_inside_library or not _is_video_file(candidate) or not os.path.isfile(candidate):
+        raise HTTPException(status_code=404, detail="Episode not found")
+    try:
+        stat = os.stat(candidate)
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="Episode not found") from exc
+    return {"minutes": _runtime_minutes(candidate, stat.st_mtime_ns, stat.st_size)}
 
 
 @router.get("/{channel_number}/tmdb")

@@ -1,20 +1,28 @@
+import ctypes
 import errno
+import hmac
 import json
 import os
 import re
 import xml.etree.ElementTree as ET
+from contextlib import ExitStack
 from pathlib import PurePosixPath
+from tempfile import TemporaryDirectory
+from threading import Lock
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from requests import RequestException
 
 from fs42.fs42_server.api.media import AUDIO_EXTENSIONS, PROJECT_ROOT, VIDEO_EXTENSIONS
 from .tmdb_helper import get_tmdb_helper
+from . import tvmaze_helper
 
 router = APIRouter(prefix="/catalog-directory", tags=["catalog-directory"])
 
 CATALOG_ROOT = os.path.realpath(os.path.join(PROJECT_ROOT, "catalog"))
 MEDIA_EXTENSIONS = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
+METADATA_EXTENSIONS = {".nfo", ".jpg", ".jpeg", ".png", ".webp"}
 PSEUDO_FILESYSTEMS = {
     "autofs", "bpf", "cgroup", "cgroup2", "configfs", "debugfs", "devpts",
     "devtmpfs", "efivarfs", "fusectl", "mqueue", "overlay", "proc", "pstore",
@@ -22,6 +30,8 @@ PSEUDO_FILESYSTEMS = {
 }
 NETWORK_FILESYSTEMS = {"9p", "cifs", "fuse.sshfs", "nfs", "nfs4", "smb3"}
 EXCLUDED_MOUNT_PREFIXES = ("/proc", "/sys", "/dev", "/run", "/boot")
+NORMALIZATION_KEY = os.urandom(32)
+NORMALIZATION_LOCK = Lock()
 
 
 class CreateDirectoryRequest(BaseModel):
@@ -64,6 +74,11 @@ class DriveCatalogFileRequest(BaseModel):
 class CheckTMDBRequest(BaseModel):
     mount: str
     path: str
+
+
+class NormalizeTMDBRequest(CheckTMDBRequest):
+    name: str
+    token: str
 
 
 def _inside(path, root):
@@ -202,6 +217,16 @@ async def browse_source(mount: str, path: str = ""):
                         entries.append({"name": entry.name, "type": "media"})
                     elif entry.is_file(follow_symlinks=True) and entry.name.lower().endswith(".json"):
                         entries.append({"name": entry.name, "type": "catalog-export"})
+                    elif entry.is_file(follow_symlinks=True):
+                        extension = os.path.splitext(entry.name)[1].lower()
+                        if extension in METADATA_EXTENSIONS:
+                            entries.append(
+                                {
+                                    "name": entry.name,
+                                    "type": "metadata",
+                                    "kind": "nfo" if extension == ".nfo" else "artwork",
+                                }
+                            )
                 except OSError:
                     continue
     except PermissionError:
@@ -329,6 +354,224 @@ def check_source_with_tmdb(request: CheckTMDBRequest):
     }
 
 
+def _normalization_source(request):
+    mount, source, relative = _source_path(request.mount, request.path)
+    if not relative or source != os.path.join(mount, relative) or os.path.ismount(source):
+        raise HTTPException(status_code=400, detail="Choose an item directly on the mounted drive, outside symlinked directories.")
+    if os.path.isdir(source):
+        return source, ""
+    extension = os.path.splitext(source)[1]
+    if os.path.isfile(source) and extension.lower() in VIDEO_EXTENSIONS:
+        return source, extension
+    raise HTTPException(status_code=400, detail="Choose a folder or video file.")
+
+
+def _normalization_token(source, name):
+    try:
+        stat = os.stat(source, follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Selected item no longer exists.") from exc
+    proposal = json.dumps([source, name, stat.st_dev, stat.st_ino]).encode()
+    return hmac.new(NORMALIZATION_KEY, proposal, "sha256").hexdigest()
+
+
+def _tvmaze_episode_name(source, stem, episode):
+    folder = os.path.dirname(source)
+    season_folder = re.fullmatch(r"season[ ._-]*(\d+)", os.path.basename(folder), re.I)
+    show_folder = os.path.dirname(folder) if season_folder else folder
+    folder_title = os.path.basename(show_folder)
+    try:
+        queries = [folder_title]
+        if episode:
+            numbers = re.fullmatch(r"S(\d+)E(\d+)", episode.group(1), re.I)
+            if not numbers:
+                raise HTTPException(status_code=400, detail="A file containing multiple episodes has no single episode title.")
+            season, number = map(int, numbers.groups())
+            if not season_folder:
+                queries.append(stem[:episode.start()].strip(" ._-"))
+
+        for query in dict.fromkeys(filter(None, queries)):
+            matches = tvmaze_helper.search_shows(query)
+            if len(matches) > 1:
+                raise HTTPException(status_code=409, detail=f"Multiple TVmaze shows match {query}. Include the premiere year in the show folder name.")
+            if matches:
+                show = matches[0]
+                break
+        else:
+            raise HTTPException(status_code=404, detail=f"No matching TVmaze show for {folder_title}.")
+
+        year = (show.get("premiered") or "")[:4]
+        if not re.fullmatch(r"\d{4}", year):
+            raise HTTPException(status_code=404, detail=f"TVmaze has no premiere year for {show['name']}.")
+
+        if episode:
+            result = tvmaze_helper.get_episode(show["id"], season, number)
+            if result and result.get("name"):
+                return show["name"], year, f"S{season:02d}E{number:02d}", result["name"]
+            raise HTTPException(status_code=404, detail=f"TVmaze has no episode for {folder_title} {episode.group(1).upper()}.")
+
+        season = int(season_folder[1])
+        title = re.sub(r"\s+\(\d{4}\)$", "", stem.strip(" ._-"))
+        candidates = [item for item in tvmaze_helper.list_episodes(show["id"])
+                      if item.get("season") == season and item.get("number") is not None
+                      and item.get("name") and tvmaze_helper.title_key(item["name"]) == tvmaze_helper.title_key(title)]
+        if len(candidates) == 1:
+            item = candidates[0]
+            return show["name"], year, f"S{season:02d}E{item['number']:02d}", item["name"]
+        raise HTTPException(status_code=404, detail=f"No unique TVmaze episode title match in {folder_title} season {season}.")
+    except RequestException as exc:
+        raise HTTPException(status_code=502, detail="TVmaze episode lookup failed. Try again later.") from exc
+
+
+def _safe_media_title(title):
+    title = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', ' ', title)
+    return _safe_name(" ".join(title.split()).rstrip("."))
+
+
+@router.post("/tmdb/normalize/preview")
+def preview_tmdb_name(request: CheckTMDBRequest):
+    source, extension = _normalization_source(request)
+    stem = os.path.basename(source).removesuffix(extension)
+    if not extension and re.fullmatch(r"(?:season|series)[ ._-]*\d+|specials", stem, re.I):
+        raise HTTPException(status_code=400, detail="Select the show folder instead of a season folder.")
+
+    episode = re.search(r"(?<![a-z0-9])(S\d{1,3}E\d{1,3}(?:E\d{1,3}|-E?\d{1,3})*)(?!\d)", stem, re.I) if extension else None
+    in_season = extension and re.fullmatch(r"season[ ._-]*\d+", os.path.basename(os.path.dirname(source)), re.I)
+    if episode or in_season:
+        series, year, code, title = _tvmaze_episode_name(source, stem, episode)
+        name = f"{_safe_media_title(series)} ({year}) - {code} - {_safe_media_title(title)}"
+    else:
+        helper = get_tmdb_helper()
+        if not helper.is_configured():
+            raise HTTPException(status_code=400, detail="TMDB is not configured. Add tmdb_api_key to confs/main_config.json.")
+        match = helper.search_media(stem, media_type="movie" if extension else None)
+        if not match or not match.get("title"):
+            raise HTTPException(status_code=404, detail="No matching title found on TMDB.")
+        title = _safe_media_title(match["title"])
+        year = (match.get("release_date") or "")[:4]
+        name = f"{title} ({year})" if year.isdigit() and len(year) == 4 else title
+    name += extension
+    return {"name": name, "token": _normalization_token(source, name)}
+
+
+@router.post("/tmdb/normalize")
+def normalize_tmdb_name(request: NormalizeTMDBRequest):
+    with NORMALIZATION_LOCK:
+        return _normalize_tmdb_name(request)
+
+
+def _normalize_tmdb_name(request):
+    source, extension = _normalization_source(request)
+    name = _safe_name(request.name)
+    if re.search(r'[<>:"|?*\x00-\x1f]', name) or name.endswith(".") or not name.endswith(extension):
+        raise HTTPException(status_code=400, detail="Invalid name or changed file extension.")
+    if not hmac.compare_digest(request.token.encode(), _normalization_token(source, name).encode()):
+        raise HTTPException(status_code=409, detail="The preview is stale. Preview this item again.")
+    destination = os.path.join(os.path.dirname(source), name)
+    if destination == source:
+        return {"name": name, "links_updated": 0}
+
+    try:
+        links_updated = _rename_with_catalog_links(source, destination)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail="An item with the new name already exists.") from exc
+    except OSError as exc:
+        location = f" ({exc.filename})" if exc.filename else ""
+        raise HTTPException(status_code=409, detail=f"Could not rename the item{location}: {exc.strerror or exc}.") from exc
+    return {"name": name, "links_updated": links_updated}
+
+
+def _rename_without_overwrite(source, destination):
+    # Linux renameat2 with RENAME_NOREPLACE protects against a concurrent destination creation.
+    rename = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+    if rename is not None:
+        rename.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+        if rename(-100, os.fsencode(source), -100, os.fsencode(destination), 1) == 0:
+            return
+        error = ctypes.get_errno()
+        if error not in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP}:
+            raise OSError(error, os.strerror(error), destination)
+
+    # Some mounts reject RENAME_NOREPLACE. Reserve the destination exclusively and
+    # replace only the empty entry we created, using the filesystem's standard rename.
+    is_directory = os.path.isdir(source)
+    if is_directory:
+        os.mkdir(destination, mode=0o700)
+        reservation = os.lstat(destination)
+    else:
+        fd = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            reservation = os.fstat(fd)
+        finally:
+            os.close(fd)
+
+    try:
+        if not os.path.samestat(os.lstat(destination), reservation):
+            raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), destination)
+        os.replace(source, destination)
+    except OSError:
+        try:
+            if os.path.samestat(os.lstat(destination), reservation):
+                if is_directory:
+                    os.rmdir(destination)
+                else:
+                    os.unlink(destination)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _rename_with_catalog_links(source, destination):
+    if _inside(CATALOG_ROOT, source):
+        raise OSError("Cannot rename a directory that contains the catalog")
+    with ExitStack() as staging:
+        updates = []
+        for link in _export_catalog_links_data(strict=True)["links"]:
+            path = _catalog_entry(link["path"])
+            old_target = os.readlink(path)
+            parent = os.path.dirname(path)
+            target = os.path.abspath(os.path.join(parent, old_target))
+            if target != source and not target.startswith(source + os.sep):
+                target = os.path.realpath(path)
+                if not _inside(target, source):
+                    continue
+            suffix = os.path.relpath(target, source)
+            new_target = destination if suffix == "." else os.path.join(destination, suffix)
+            if not os.path.isabs(old_target):
+                new_target = os.path.relpath(new_target, parent)
+            temporary = staging.enter_context(TemporaryDirectory(prefix=".fs42-relink-", dir=parent))
+            replacement = os.path.join(temporary, "new")
+            backup = os.path.join(temporary, "old")
+            os.symlink(new_target, replacement)
+            os.symlink(old_target, backup)
+            updates.append((path, old_target, new_target, replacement, backup))
+
+        _rename_without_overwrite(source, destination)
+        applied = []
+        try:
+            for path, old_target, new_target, replacement, backup in updates:
+                if os.readlink(path) != old_target:
+                    raise OSError(f"Catalog link changed during rename: {path}")
+                os.replace(replacement, path)
+                applied.append((path, new_target, backup))
+        except OSError as exc:
+            try:
+                _rename_without_overwrite(destination, source)
+            except OSError as rollback_error:
+                raise HTTPException(status_code=500, detail=f"The item was renamed to {destination}, but a catalog link update failed and the rename could not be rolled back: {rollback_error}") from exc
+            failed = []
+            for path, new_target, backup in reversed(applied):
+                try:
+                    if os.readlink(path) == new_target:
+                        os.replace(backup, path)
+                except OSError:
+                    failed.append(os.path.relpath(path, CATALOG_ROOT))
+            if failed:
+                raise HTTPException(status_code=500, detail=f"The item name was restored, but these catalog links could not be restored: {', '.join(failed)}.") from exc
+            raise
+        return len(updates)
+
+
 @router.get("/catalog")
 async def browse_catalog(path: str = ""):
     directory = _catalog_directory(path)
@@ -357,10 +600,16 @@ async def browse_catalog(path: str = ""):
     return {"path": relative_path, "entries": entries}
 
 
-def _export_catalog_links_data():
+def _export_catalog_links_data(strict=False):
     os.makedirs(CATALOG_ROOT, exist_ok=True)
     links = []
-    for current, directories, files in os.walk(CATALOG_ROOT, followlinks=False):
+
+    def raise_walk_error(error):
+        raise error
+
+    for current, directories, files in os.walk(
+        CATALOG_ROOT, followlinks=False, onerror=raise_walk_error if strict else None,
+    ):
         relative_directory = os.path.relpath(current, CATALOG_ROOT)
         relative_directory = "" if relative_directory == "." else relative_directory.replace(os.sep, "/")
         for name in list(directories):

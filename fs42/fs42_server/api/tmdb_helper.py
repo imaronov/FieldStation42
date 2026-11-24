@@ -219,7 +219,7 @@ class TMDBHelper:
             logger.error(f"Unexpected error searching TMDB for '{title}': {e}")
             return None
 
-    def search_media(self, title: str) -> Optional[Dict[str, Any]]:
+    def search_media(self, title: str, media_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Search TMDB for the best matching movie or television show."""
         if not self.is_configured():
             logger.warning("TMDB API key not configured, skipping media search")
@@ -243,6 +243,7 @@ class TMDBHelper:
                 item
                 for item in response.json().get("results", [])
                 if item.get("media_type") in {"movie", "tv"}
+                and (media_type is None or item.get("media_type") == media_type)
             ]
             if year:
                 year_matches = [
