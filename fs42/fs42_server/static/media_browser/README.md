@@ -13,7 +13,7 @@ Create a web station such as `confs/on_demand.json`:
 ```json
 {
   "station_conf": {
-    "network_name": "On Demand",
+    "network_name": "MyFlix",
     "channel_number": 44,
     "network_type": "web",
     "hidden": false,
@@ -111,5 +111,5 @@ Movie cards use a same-name local poster first. When local artwork or metadata i
 After adding or changing a station configuration, restart the player and Web UI services:
 
 ```bash
-systemctl --user restart fs42-station-42.service fs42.service
+systemctl --user restart fs42.service
 ```
