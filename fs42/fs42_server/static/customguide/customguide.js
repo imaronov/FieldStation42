@@ -1,6 +1,7 @@
 const params = new URLSearchParams(window.location.search);
+const COMPACT = params.get('compact') === '1';
 const THEME = params.get('theme') || '80s';
-const SLOT_COUNT = parseInt(params.get('slots')) || 3;
+const SLOT_COUNT = COMPACT ? 1 : parseInt(params.get('slots')) || 3;
 const HEADER_TEXT = params.get('header') || null;
 const PAUSE_OVERRIDE = params.get('pause');
 const MOCK = params.get('mock') === '1';
@@ -210,11 +211,14 @@ function buildScrollStrip(slots, schedules) {
   const channelAfter = getCSSVar('--channel-position').replace(/["']/g, '') === 'after';
   const offairText = getCSSVar('--offair-text').replace(/^["']|["']$/g, '') || 'Offair';
 
+  const now = COMPACT ? new Date() : null;
   for (const slot of slots) {
-    const heading = document.createElement('div');
-    heading.className = 'time-slot-heading';
-    heading.textContent = formatTime12(slot.start);
-    strip.appendChild(heading);
+    if (!COMPACT) {
+      const heading = document.createElement('div');
+      heading.className = 'time-slot-heading';
+      heading.textContent = formatTime12(slot.start);
+      strip.appendChild(heading);
+    }
 
     for (const station of stations) {
       const row = document.createElement('div');
@@ -231,7 +235,7 @@ function buildScrollStrip(slots, schedules) {
       const nameSpan = document.createElement('span');
       nameSpan.className = 'channel-name';
       const name = station.network_name;
-      nameSpan.textContent = name.length > 10 ? name.slice(0, 10) + '…' : name;
+      nameSpan.textContent = !COMPACT && name.length > 10 ? name.slice(0, 10) + '…' : name;
 
       channelInfo.appendChild(numSpan);
       channelInfo.appendChild(nameSpan);
@@ -239,11 +243,11 @@ function buildScrollStrip(slots, schedules) {
       const titleSpan = document.createElement('span');
       titleSpan.className = 'show-title';
 
-      const result = findBlockForSlot(schedules[station.network_name] || [], slot.start);
+      const result = findBlockForSlot(schedules[station.network_name] || [], now || slot.start);
       if (result) {
         const t = result.block.title || offairText;
-        titleSpan.textContent = t.length > 20 ? t.slice(0, 20) + '…' : t;
-        if (result.continued) row.classList.add('continued');
+        titleSpan.textContent = !COMPACT && t.length > 20 ? t.slice(0, 20) + '…' : t;
+        if (!COMPACT && result.continued) row.classList.add('continued');
       } else {
         titleSpan.textContent = offairText;
       }
@@ -268,6 +272,10 @@ async function buildGuide() {
   const slots = computeSlotTimes();
   const schedules = MOCK ? mockFetchAllSchedules(slots) : await fetchAllSchedules(slots);
   const listings = document.getElementById('guide-listings');
+  if (COMPACT && !stations.length) {
+    listings.textContent = 'No channels available.';
+    return;
+  }
   listings.innerHTML = '';
   listings.appendChild(buildScrollStrip(slots, schedules));
 }
@@ -1058,6 +1066,7 @@ function startTextCarousel() {
 // ===== INIT =====
 
 async function init() {
+  if (COMPACT) document.documentElement.classList.add('compact-guide');
   await loadTheme(THEME);
 
   const headerPos = getCSSVar('--header-position').replace(/["']/g, '');
@@ -1068,16 +1077,21 @@ async function init() {
 
   const layoutMode = getCSSVar('--layout-mode').replace(/["']/g, '') || 'list';
 
-  if (layoutMode === 'grid') {
+  if (!COMPACT && layoutMode === 'grid') {
     await initGridMode();
   } else {
-    startClock();
-    const musicLoaded = loadMusicPlaylist();
+    if (!COMPACT) {
+      document.getElementById('guide-header').hidden = false;
+      startClock();
+    }
+    const musicLoaded = COMPACT ? null : loadMusicPlaylist();
     if (MOCK) mockFetchStations(); else await fetchStations();
     await buildGuide();
-    startScrolling();
-    await musicLoaded;
-    setupMusic();
+    if (!COMPACT || stations.length) startScrolling();
+    if (musicLoaded) {
+      await musicLoaded;
+      setupMusic();
+    }
   }
 }
 

@@ -446,30 +446,47 @@
 
 			<!-- Currently Playing Display -->
 			<div class="now-playing">
-				<div class="now-playing-label">NOW PLAYING</div>
-				<div class="now-playing-network" id="now-playing-network">
-					No network
-				</div>
-				<div class="now-playing-status" id="now-playing-status">Stopped</div>
-				<div class="now-playing-title" id="now-playing-title">
-					No program selected
-				</div>
-				<div class="playback-timeline" id="playback-timeline" hidden>
-					<input
-						id="playback-timeline-slider"
-						type="range"
-						min="0"
-						max="1"
-						value="0"
-						disabled
-						aria-label="Current video playback position"
-					/>
-					<div class="playback-timeline-values">
-						<div><span id="timeline-start">0:00</span></div>
-						<div><span id="timeline-current">0:00</span></div>
-						<div><span id="timeline-end">0:00</span></div>
+				<button
+					type="button"
+					class="now-playing-label now-playing-toggle"
+					id="now-playing-toggle"
+					aria-expanded="false"
+					aria-controls="now-playing-guide"
+					aria-label="Now Playing: show scrolling TV guide"
+				>
+					NOW PLAYING
+				</button>
+				<div id="now-playing-details">
+					<div class="now-playing-network" id="now-playing-network">
+						No network
+					</div>
+					<div class="now-playing-status" id="now-playing-status">Stopped</div>
+					<div class="now-playing-title" id="now-playing-title">
+						No program selected
+					</div>
+					<div class="playback-timeline" id="playback-timeline" hidden>
+						<input
+							id="playback-timeline-slider"
+							type="range"
+							min="0"
+							max="1"
+							value="0"
+							disabled
+							aria-label="Current video playback position"
+						/>
+						<div class="playback-timeline-values">
+							<div><span id="timeline-start">0:00</span></div>
+							<div><span id="timeline-current">0:00</span></div>
+							<div><span id="timeline-end">0:00</span></div>
+						</div>
 					</div>
 				</div>
+				<iframe
+					id="now-playing-guide"
+					title="Scrolling TV guide"
+					tabindex="-1"
+					hidden
+				></iframe>
 			</div>
 
 			<!-- Function Buttons -->
@@ -697,6 +714,23 @@
 			const nowPlayingNetwork = document.getElementById('now-playing-network');
 			const nowPlayingStatus = document.getElementById('now-playing-status');
 			const nowPlayingTitle = document.getElementById('now-playing-title');
+			const nowPlayingGuide = document.getElementById('now-playing-guide');
+			const nowPlayingToggle = document.getElementById('now-playing-toggle');
+
+			nowPlayingToggle.closest('.now-playing').addEventListener('click', () => {
+				const showGuide = nowPlayingGuide.hidden;
+				nowPlayingGuide.hidden = !showGuide;
+				nowPlayingToggle.setAttribute('aria-expanded', String(showGuide));
+				nowPlayingToggle.setAttribute(
+					'aria-label',
+					showGuide ? 'TV Guide: return to Now Playing' : 'Now Playing: show scrolling TV guide',
+				);
+				if (showGuide) {
+					nowPlayingGuide.src = '/static/customguide/customguide.html?compact=1';
+				} else {
+					nowPlayingGuide.removeAttribute('src');
+				}
+			});
 			let currentChannel = null;
 			let previousChannelAvailable = false;
 			let tuningPreviousChannel = false;
