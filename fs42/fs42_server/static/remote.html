@@ -172,7 +172,7 @@
 				font-size: 15px;
 				font-variant-numeric: tabular-nums;
 			}
-			.station-picker-list button[aria-current="true"] {
+			.station-picker-list button[aria-current='true'] {
 				background: var(--station-picker-accent);
 				border-color: var(--station-picker-accent);
 				color: #111;
@@ -321,6 +321,214 @@
 					height: 42px;
 				}
 			}
+			html:has(.remote-container[data-layout='mobile']) {
+				background: var(--retro-surface, #2a2a2a);
+			}
+			body:has(.remote-container[data-layout='mobile']) {
+				background: transparent;
+				margin: 0;
+				min-height: 0;
+			}
+			.remote-container[data-layout='mobile'],
+			.remote-container[data-layout='mobile'] :is(.remote-screen, .now-playing) {
+				background: transparent;
+				box-shadow: none;
+			}
+			.remote-container[data-layout='mobile'] {
+				box-sizing: border-box;
+				display: grid;
+				grid-template-columns: minmax(0, 1fr);
+				grid-template-areas:
+					'header'
+					'screen'
+					'pad'
+					'controls'
+					'playing'
+					'functions';
+				grid-template-rows: auto auto minmax(min-content, 1fr) auto auto auto;
+				align-items: start;
+				gap: 8px;
+				width: 100%;
+				max-width: none;
+				min-height: 100vh;
+				min-height: 100dvh;
+				border: 0;
+				border-radius: 0;
+				margin: 0 auto;
+				padding: max(8px, env(safe-area-inset-top))
+					max(8px, env(safe-area-inset-right))
+					max(8px, env(safe-area-inset-bottom))
+					max(8px, env(safe-area-inset-left));
+			}
+			.remote-container {
+				position: relative;
+				isolation: isolate;
+			}
+			.remote-container > .remote-brand {
+				position: absolute;
+				inset: 0;
+				z-index: -1;
+				display: grid;
+				place-items: start center;
+				padding-top: max(8px, env(safe-area-inset-top));
+				font-size: clamp(24px, 7vw, 36px);
+				text-align: center;
+				text-shadow: none;
+				opacity: 0.2;
+				pointer-events: none;
+			}
+			.remote-layout-picker {
+				position: relative;
+				top: 10px;
+				display: flex;
+				flex: 1;
+				min-width: 0;
+				align-items: center;
+				justify-content: center;
+				gap: 10px;
+				min-height: 44px;
+				cursor: pointer;
+				font-size: 10px;
+				text-align: center;
+				white-space: nowrap;
+			}
+			.remote-layout-picker input {
+				position: absolute;
+				opacity: 0;
+			}
+			.remote-layout-track {
+				box-sizing: border-box;
+				position: relative;
+				flex: 0 0 30px;
+				height: 17px;
+				border: 1px solid #61afef;
+				border-radius: 999px;
+				background: #222;
+			}
+			.remote-layout-track::before {
+				content: '';
+				position: absolute;
+				top: 2px;
+				left: 2px;
+				width: 11px;
+				height: 11px;
+				border-radius: 50%;
+				background: #61afef;
+			}
+			.remote-layout-picker input:checked + .remote-layout-track::before {
+				transform: translateX(13px);
+			}
+			.remote-layout-picker input:focus-visible + .remote-layout-track {
+				outline: 2px solid #61afef;
+				outline-offset: 2px;
+			}
+			.remote-container .remote-header .power-btn {
+				width: 64px;
+				min-width: 0;
+				padding-inline: 2px;
+				font-size: 10px;
+			}
+			.remote-container[data-layout='mobile']
+				> :is(.remote-header, .remote-screen, .button-grid, .now-playing) {
+				box-sizing: border-box;
+				width: 100%;
+				min-width: 0;
+				max-width: none;
+				margin: 0;
+			}
+			.remote-container[data-layout='mobile'] .remote-header {
+				grid-area: header;
+			}
+			.remote-container[data-layout='mobile'] .remote-screen {
+				grid-area: screen;
+				padding: 6px;
+				min-height: 32px;
+			}
+			.remote-container[data-layout='mobile'] :is(.number-pad, .nav-pad) {
+				grid-area: pad;
+				align-self: stretch;
+				align-content: space-evenly;
+				gap: 6px;
+			}
+			.remote-container > [hidden] {
+				display: none !important;
+			}
+			.remote-container[data-layout='mobile'] .volume-channel-section {
+				grid-area: controls;
+				grid-template-columns: repeat(2, minmax(0, 1fr));
+				justify-items: stretch;
+				gap: 6px;
+			}
+			.remote-container[data-layout='mobile'] .function-section {
+				grid-area: functions;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				gap: 6px;
+			}
+			.remote-container[data-layout='mobile'] .now-playing {
+				grid-area: playing;
+				padding: 6px 8px;
+				overflow-wrap: anywhere;
+			}
+			.remote-container[data-layout='mobile'] .now-playing-label {
+				margin-bottom: 4px;
+			}
+			.remote-container[data-layout='mobile'] .playback-timeline {
+				margin-bottom: 0;
+			}
+			.remote-container[data-layout='mobile'] .remote-control-column {
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				gap: 3px;
+				min-width: 0;
+				padding: 4px;
+			}
+			.remote-container[data-layout='mobile'] .remote-control-label {
+				grid-column: 1 / -1;
+			}
+			.remote-container[data-layout='mobile'] [data-key='mute'] {
+				order: 1;
+			}
+			.remote-container[data-layout='mobile'] [data-key='vol_down'] {
+				order: 2;
+			}
+			.remote-container[data-layout='mobile'] [data-key='vol_up'] {
+				order: 3;
+			}
+			.remote-container[data-layout='mobile'] .remote-btn {
+				box-sizing: border-box;
+				min-width: 0;
+				min-height: 44px;
+				height: 44px;
+				padding: 4px;
+			}
+			.remote-container[data-layout='mobile']
+				:is(.function-btn, .volume-btn, .channel-btn) {
+				width: 100%;
+			}
+			.remote-container[data-layout='mobile'] :is(.number-btn, .nav-btn) {
+				--pad-button-size: clamp(48px, 7.5dvh, 68px);
+				width: var(--pad-button-size);
+				height: var(--pad-button-size);
+				border-radius: 30%;
+				font-size: 16px;
+			}
+			.remote-container[data-layout='mobile'] #previous-channel {
+				font-size: 10px;
+			}
+			.remote-container[data-layout='mobile'] #playback-controls {
+				margin: 0;
+				gap: 4px;
+			}
+			.remote-container[data-layout='mobile'] #playback-controls > .remote-btn {
+				height: 44px;
+			}
+			@media (max-height: 720px) {
+				.remote-container[data-layout='mobile'] {
+					gap: 4px;
+				}
+				.remote-container[data-layout='mobile'] :is(.number-pad, .nav-pad) {
+					gap: 4px;
+				}
+			}
 		</style>
 	</head>
 
@@ -347,7 +555,8 @@
 				window.fs42Common.initTheme();
 			});
 		</script>
-		<div class="remote-container">
+		<div class="remote-container" id="remote-container" data-layout="desktop">
+			<div class="remote-brand">FieldStation42</div>
 			<div class="remote-header">
 				<button class="remote-btn power-btn" data-key="services_shutdown">
 					<svg
@@ -363,7 +572,18 @@
 					</svg>
 					<span>POWER OFF</span>
 				</button>
-				<div class="remote-brand">FieldStation42</div>
+				<label class="remote-layout-picker">
+					<span>Mobile</span>
+					<input
+						type="checkbox"
+						id="remote-layout"
+						role="switch"
+						aria-label="Use desktop layout"
+						checked
+					/>
+					<span class="remote-layout-track" aria-hidden="true"></span>
+					<span>Desktop</span>
+				</label>
 				<button
 					class="remote-btn power-btn restart-btn"
 					data-key="services_restart"
@@ -800,6 +1020,36 @@
 		</dialog>
 
 		<script>
+			const remoteContainer = document.getElementById('remote-container');
+			const remoteLayout = document.getElementById('remote-layout');
+			const remoteLayoutKey = 'fs42-remote-layout';
+			const phoneViewport = window.matchMedia(
+				'(max-width: 639px), (max-width: 1000px) and (pointer: coarse)',
+			);
+
+			let initialLayout = phoneViewport.matches ? 'mobile' : 'desktop';
+			try {
+				const savedLayout = localStorage.getItem(remoteLayoutKey);
+				if (['mobile', 'iphone-17', 'iphone-air'].includes(savedLayout)) {
+					initialLayout = 'mobile';
+				} else if (savedLayout === 'desktop') {
+					initialLayout = 'desktop';
+				}
+			} catch {
+				// The layout remains available when browser storage is disabled.
+			}
+			remoteLayout.checked = initialLayout === 'desktop';
+			remoteContainer.dataset.layout = initialLayout;
+			remoteLayout.addEventListener('change', () => {
+				const layout = remoteLayout.checked ? 'desktop' : 'mobile';
+				remoteContainer.dataset.layout = layout;
+				try {
+					localStorage.setItem(remoteLayoutKey, layout);
+				} catch {
+					// Keep the current selection for this page.
+				}
+			});
+
 			// Basic remote control functionality
 			const display = document.getElementById('remote-display');
 			const nowPlayingNetwork = document.getElementById('now-playing-network');
@@ -1481,7 +1731,9 @@
 			}
 
 			const stationPicker = document.getElementById('station-picker');
-			const stationPickerStatus = document.getElementById('station-picker-status');
+			const stationPickerStatus = document.getElementById(
+				'station-picker-status',
+			);
 			const stationPickerList = document.getElementById('station-picker-list');
 
 			async function openStationPicker() {
@@ -1495,10 +1747,13 @@
 					const stations = channels
 						.filter(
 							(station) =>
-								Number.isInteger(station.channel_number) && station.channel_number >= 0,
+								Number.isInteger(station.channel_number) &&
+								station.channel_number >= 0,
 						)
 						.sort((a, b) => a.channel_number - b.channel_number);
-					stationPickerStatus.textContent = stations.length ? '' : 'No configured channels.';
+					stationPickerStatus.textContent = stations.length
+						? ''
+						: 'No configured channels.';
 					for (const station of stations) {
 						const button = document.createElement('button');
 						const channel = String(station.channel_number).padStart(3, '0');
@@ -1508,16 +1763,19 @@
 						number.className = 'station-picker-channel';
 						number.textContent = channel;
 						const name = document.createElement('span');
-						name.textContent = station.network_long_name || station.network_name;
+						name.textContent =
+							station.network_long_name || station.network_name;
 						button.append(number, name);
-						if (channel === currentChannel) button.setAttribute('aria-current', 'true');
+						if (channel === currentChannel)
+							button.setAttribute('aria-current', 'true');
 						button.addEventListener('click', () =>
 							tuneFromStationPicker(station.channel_number),
 						);
 						stationPickerList.append(button);
 					}
 				} catch (error) {
-					stationPickerStatus.textContent = error.detail || 'Could not load stations.';
+					stationPickerStatus.textContent =
+						error.detail || 'Could not load stations.';
 				} finally {
 					stationPickerList.disabled = false;
 				}
@@ -1536,7 +1794,8 @@
 					display.textContent = `CH ${String(channel).padStart(3, '0')}`;
 					stationPicker.close();
 				} catch (error) {
-					stationPickerStatus.textContent = error.detail || 'Could not change channel.';
+					stationPickerStatus.textContent =
+						error.detail || 'Could not change channel.';
 				} finally {
 					stationPickerList.disabled = false;
 				}
