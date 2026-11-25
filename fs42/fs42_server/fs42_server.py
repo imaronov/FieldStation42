@@ -66,6 +66,13 @@ async def root():
 async def remote():
     return FileResponse("fs42/fs42_server/static/remote.html", headers=REVALIDATE)
 
+@fapi.get("/static/fonts/DSEG14ClassicMini-Regular.ttf", include_in_schema=False)
+async def remote_display_font():
+    font_path = "/usr/share/fonts/truetype/dseg/DSEG14ClassicMini-Regular.ttf"
+    if not os.path.isfile(font_path):
+        return JSONResponse(status_code=404, content={"detail": "Install fonts-dseg to enable the remote display font."})
+    return FileResponse(font_path, media_type="font/ttf", headers=REVALIDATE)
+
 @fapi.get('/favicon.ico', include_in_schema=False)
 async def favicon():
     return FileResponse("fs42/fs42_server/static/favicon.ico")

@@ -90,6 +90,8 @@ def input_check():
                 case "reload_data":
                     # the player reads schedules straight from the database, so there is nothing to reload
                     pass
+                case "previous":
+                    return PlayerOutcome(PlayerState.CHANNEL_CHANGE, json.dumps(q_message))
                 case "guide":
                     try:
                         c_number = StationManager().guide_config["channel_number"]
@@ -271,9 +273,6 @@ def main_loop(transition_fn, shutdown_queue=None, api_proc=None):
 
         if player_state.status == PlayerState.CHANNEL_CHANGE:
             stuck_timer = 0
-            player.parental_unlocked_network = None
-            # Close any lingering pop-up overlay
-            player._close_now_playing()
             # Cache stations to prevent race conditions during reload
             station_cache = manager.stations
             stations_len = len(station_cache)
@@ -307,6 +306,22 @@ def main_loop(transition_fn, shutdown_queue=None, api_proc=None):
                         elif as_obj["command"] == "up":
                             tune_up = True
                             logger.debug("Got channel up command")
+                        elif as_obj["command"] == "previous":
+                            tune_up = False
+                            if player.previous_station_name is None:
+                                continue
+                            new_index = next(
+                                (index for index, station in enumerate(station_cache)
+                                 if station["network_name"] == player.previous_station_name),
+                                None,
+                            )
+                            if new_index is None:
+                                player.previous_station_name = None
+                                player.update_status(
+                                    "idle", channel_conf["network_name"], channel_conf["channel_number"]
+                                )
+                                continue
+                            channel_index = new_index
                         elif as_obj["command"] == "down":
                             tune_up = False
                             logger.debug("Got channel down command")
@@ -334,9 +349,16 @@ def main_loop(transition_fn, shutdown_queue=None, api_proc=None):
                     channel_index = channel_index if channel_index < stations_len else 0
                     found = not station_cache[channel_index]["hidden"]
 
-            # save the player state
+            player.parental_unlocked_network = None
+            player._close_now_playing()
             save_channel_index(channel_index)
-            channel_conf = station_cache[channel_index]
+            next_station = station_cache[channel_index]
+            if next_station["network_name"] != channel_conf["network_name"]:
+                player.previous_station_name = channel_conf["network_name"]
+                player.update_status(
+                    "idle", next_station["network_name"], next_station["channel_number"]
+                )
+            channel_conf = next_station
             player.station_config = channel_conf
 
             # long_change_effect(player, reception)
@@ -364,6 +386,7 @@ def main_loop(transition_fn, shutdown_queue=None, api_proc=None):
                     logger.warning("Tune to channel %s and unlock it before requesting playback", requested_channel)
                     continue
                 channel_index = target_index
+                player.previous_station_name = channel_conf["network_name"]
                 channel_conf = target_station
                 player.station_config = channel_conf
                 player.parental_unlocked_network = None
@@ -383,7 +406,7 @@ def main_loop(transition_fn, shutdown_queue=None, api_proc=None):
                 waiting_for_schedule = network_name
                 logger.warning(f"Nothing scheduled on {network_name} - waiting for the schedule agent to build it")
                 player.play_file(standby_image_for(channel_conf))
-                update_status_socket("stuck", network_name, channel_conf["channel_number"], "Building schedule")
+                player.update_status("stuck", network_name, channel_conf["channel_number"], "Building schedule")
             schedule_agent.request_build(network_name)
 
             new_state = wait_for_input(1)
@@ -398,7 +421,7 @@ def main_loop(transition_fn, shutdown_queue=None, api_proc=None):
             if stuck_timer == 2:
                 player.play_file(standby_image_for(channel_conf))
             current_title_on_stuck = player.get_current_path()
-            update_status_socket(
+            player.update_status(
                 "stuck",
                 channel_conf["network_name"],
                 channel_conf["channel_number"],
