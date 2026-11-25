@@ -115,6 +115,7 @@
 				letter-spacing: 0.06em;
 			}
 			.station-picker {
+				--station-picker-accent: #61afef;
 				box-sizing: border-box;
 				width: min(340px, calc(100% - 24px));
 				padding: 14px;
@@ -135,23 +136,47 @@
 			.station-picker-header h2 {
 				margin: 0;
 				font-size: 18px;
+				color: var(--station-picker-accent);
 			}
 			.station-picker-list {
 				display: grid;
+				grid-template-columns: repeat(2, minmax(0, 1fr));
+				grid-auto-rows: max-content;
+				align-content: start;
 				gap: 6px;
 				max-height: 55vh;
 				overflow: auto;
 				margin: 10px 0 0;
+				min-inline-size: 0;
 				padding: 2px;
 				border: 0;
 			}
-			.station-picker-list button {
+			.station-picker-list .function-btn {
+				box-sizing: border-box;
+				display: block;
+				width: 100%;
+				min-width: 0;
+				height: auto;
 				min-height: 44px;
+				font-size: 12px;
+				line-height: 1.3;
 				text-align: left;
 				white-space: normal;
+				overflow-wrap: anywhere;
+			}
+			.station-picker-list .function-btn > span {
+				display: block;
+			}
+			.station-picker-channel {
+				margin-bottom: 3px;
+				font-size: 15px;
+				font-variant-numeric: tabular-nums;
 			}
 			.station-picker-list button[aria-current="true"] {
-				box-shadow: inset 0 0 0 2px #4caf50;
+				background: var(--station-picker-accent);
+				border-color: var(--station-picker-accent);
+				color: #111;
+				text-shadow: none;
 			}
 			#playback-controls {
 				display: grid !important;
@@ -745,11 +770,21 @@
 					SUBS
 				</button>
 				<button class="remote-btn function-btn" data-key="audio">AUDIO</button>
-				<button class="remote-btn function-btn" data-key="stations" aria-haspopup="dialog">STATIONS</button>
+				<button
+					class="remote-btn function-btn"
+					data-key="stations"
+					aria-haspopup="dialog"
+				>
+					STATIONS
+				</button>
 			</div>
 		</div>
 
-		<dialog class="station-picker" id="station-picker" aria-labelledby="station-picker-title">
+		<dialog
+			class="station-picker"
+			id="station-picker"
+			aria-labelledby="station-picker-title"
+		>
 			<div class="station-picker-header">
 				<h2 id="station-picker-title">Stations</h2>
 				<form method="dialog">
@@ -757,7 +792,11 @@
 				</form>
 			</div>
 			<div id="station-picker-status" role="status"></div>
-			<fieldset class="station-picker-list" id="station-picker-list" aria-label="Configured channels"></fieldset>
+			<fieldset
+				class="station-picker-list"
+				id="station-picker-list"
+				aria-label="Configured channels"
+			></fieldset>
 		</dialog>
 
 		<script>
@@ -1454,17 +1493,27 @@
 				try {
 					const { channels } = await window.fs42Api.get('summary/channels');
 					const stations = channels
-						.filter(station => Number.isInteger(station.channel_number) && station.channel_number >= 0)
+						.filter(
+							(station) =>
+								Number.isInteger(station.channel_number) && station.channel_number >= 0,
+						)
 						.sort((a, b) => a.channel_number - b.channel_number);
 					stationPickerStatus.textContent = stations.length ? '' : 'No configured channels.';
 					for (const station of stations) {
 						const button = document.createElement('button');
 						const channel = String(station.channel_number).padStart(3, '0');
 						button.type = 'button';
-						button.className = 'pure-button';
-						button.textContent = `${channel} · ${station.network_long_name || station.network_name}`;
+						button.className = 'remote-btn function-btn';
+						const number = document.createElement('span');
+						number.className = 'station-picker-channel';
+						number.textContent = channel;
+						const name = document.createElement('span');
+						name.textContent = station.network_long_name || station.network_name;
+						button.append(number, name);
 						if (channel === currentChannel) button.setAttribute('aria-current', 'true');
-						button.addEventListener('click', () => tuneFromStationPicker(station.channel_number));
+						button.addEventListener('click', () =>
+							tuneFromStationPicker(station.channel_number),
+						);
 						stationPickerList.append(button);
 					}
 				} catch (error) {
