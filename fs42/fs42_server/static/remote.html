@@ -219,6 +219,49 @@
 				white-space: normal;
 				overflow-wrap: anywhere;
 			}
+			#media-track-picker-list {
+				grid-template-columns: minmax(0, 1fr);
+			}
+			.subtitle-style-options {
+				display: grid;
+				grid-template-columns: repeat(2, minmax(0, 1fr));
+				gap: 12px;
+				margin: 10px 0;
+				padding: 0;
+				border: 0;
+				min-inline-size: 0;
+			}
+			.subtitle-style-options[hidden] {
+				display: none;
+			}
+			.subtitle-style-options label,
+			.subtitle-position-picker {
+				display: grid;
+				gap: 4px;
+				min-width: 0;
+				font-size: 13px;
+			}
+			.subtitle-style-options select {
+				box-sizing: border-box;
+				width: 100%;
+				min-width: 0;
+				min-height: 32px;
+				margin: 0;
+			}
+			.subtitle-position-buttons {
+				display: grid;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				gap: 3px;
+			}
+			.subtitle-position-buttons .pure-button {
+				min-height: 32px;
+				padding: 2px;
+				font-size: 11px;
+			}
+			.subtitle-position-buttons button[aria-pressed='true'] {
+				background: var(--station-picker-accent);
+				color: #111;
+			}
 			.station-picker-list .function-btn > span {
 				display: block;
 			}
@@ -1047,12 +1090,20 @@
 				<button class="remote-btn function-btn" data-key="guide">GUIDE</button>
 				<button class="remote-btn function-btn" data-key="exit">EXIT</button>
 				<button class="remote-btn function-btn" data-key="info">INFO</button>
-				<!-- Cycle MPV tracks without changing channel playback. The player shows
-                 the selected audio/subtitle track on MPV's on-screen display. -->
-				<button class="remote-btn function-btn" data-key="subtitles">
+				<button
+					class="remote-btn function-btn"
+					data-key="subtitles"
+					aria-haspopup="dialog"
+				>
 					SUBS
 				</button>
-				<button class="remote-btn function-btn" data-key="audio">AUDIO</button>
+				<button
+					class="remote-btn function-btn"
+					data-key="audio"
+					aria-haspopup="dialog"
+				>
+					AUDIO
+				</button>
 				<button
 					class="remote-btn function-btn"
 					data-key="stations"
@@ -1079,6 +1130,121 @@
 				class="station-picker-list"
 				id="station-picker-list"
 				aria-label="Configured channels"
+			></fieldset>
+		</dialog>
+		<dialog
+			class="station-picker"
+			id="media-track-picker"
+			aria-labelledby="media-track-picker-title"
+		>
+			<div class="station-picker-header">
+				<h2 id="media-track-picker-title">Subtitles</h2>
+				<form method="dialog">
+					<button class="pure-button" autofocus>Close</button>
+				</form>
+			</div>
+			<div id="media-track-picker-status" role="status"></div>
+			<fieldset
+				class="subtitle-style-options"
+				id="subtitle-style-options"
+				aria-label="Subtitle appearance"
+				hidden
+				disabled
+			>
+				<div
+					class="subtitle-position-picker"
+					role="group"
+					aria-labelledby="subtitle-position-label"
+				>
+					<span id="subtitle-position-label">Position</span>
+					<div class="subtitle-position-buttons">
+						<!-- Top -->
+						<button
+							type="button"
+							class="pure-button"
+							data-subtitle-position="22"
+							aria-pressed="false"
+							aria-label="Top"
+							title="Top"
+						>
+							<svg
+								class="remote-icon"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								aria-hidden="true"
+							>
+								<rect x="3" y="3" width="18" height="18" rx="2" />
+								<path d="M7 7h10" />
+							</svg>
+						</button>
+						<!-- Center -->
+						<button
+							type="button"
+							class="pure-button"
+							data-subtitle-position="50"
+							aria-pressed="false"
+							aria-label="Center"
+							title="Center"
+						>
+							<svg
+								class="remote-icon"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								aria-hidden="true"
+							>
+								<rect x="3" y="3" width="18" height="18" rx="2" />
+								<path d="M7 12h10" />
+							</svg>
+						</button>
+						<!-- Bottom -->
+						<button
+							type="button"
+							class="pure-button"
+							data-subtitle-position="100"
+							aria-pressed="false"
+							aria-label="Bottom"
+							title="Bottom"
+						>
+							<svg
+								class="remote-icon"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								aria-hidden="true"
+							>
+								<rect x="3" y="3" width="18" height="18" rx="2" />
+								<path d="M7 17h10" />
+							</svg>
+						</button>
+					</div>
+				</div>
+				<label>
+					Background
+					<select id="subtitle-background" name="background">
+						<option value="none">No background (default)</option>
+						<option value="translucent">Translucent black</option>
+						<option value="solid">Solid black</option>
+					</select>
+				</label>
+				<div
+					id="subtitle-style-status"
+					role="status"
+					style="grid-column: 1 / -1"
+					hidden
+				></div>
+			</fieldset>
+			<fieldset
+				class="station-picker-list"
+				id="media-track-picker-list"
+				aria-labelledby="media-track-picker-title"
 			></fieldset>
 		</dialog>
 
@@ -1132,7 +1298,9 @@
 				(fonts) => {
 					if (!fonts.length) return;
 					displayReadout.classList.add('has-segments');
-					for (const fill of displayReadout.parentElement.querySelectorAll('.remote-display-fill')) {
+					for (const fill of displayReadout.parentElement.querySelectorAll(
+						'.remote-display-fill',
+					)) {
 						fill.dataset.unlit = '~'.repeat(80);
 					}
 				},
@@ -1887,6 +2055,181 @@
 				}
 			}
 
+			const mediaTrackPicker = document.getElementById('media-track-picker');
+			const mediaTrackPickerStatus = document.getElementById(
+				'media-track-picker-status',
+			);
+			const mediaTrackPickerList = document.getElementById(
+				'media-track-picker-list',
+			);
+			const mediaTrackPickerTitle = document.getElementById(
+				'media-track-picker-title',
+			);
+			const subtitleStyleOptions = document.getElementById(
+				'subtitle-style-options',
+			);
+			const subtitlePositionButtons = subtitleStyleOptions.querySelectorAll(
+				'[data-subtitle-position]',
+			);
+			const subtitleBackground = document.getElementById('subtitle-background');
+			const subtitleStyleStatus = document.getElementById(
+				'subtitle-style-status',
+			);
+			const subtitleStyleEndpoint = 'player/mpv/subtitle-style';
+			let subtitleStyle;
+			let savingSubtitleStyle = false;
+
+			function showSubtitleStyle(settings) {
+				subtitleStyle = settings;
+				for (const button of subtitlePositionButtons) {
+					button.setAttribute(
+						'aria-pressed',
+						String(
+							Number(button.dataset.subtitlePosition) === settings.position,
+						),
+					);
+				}
+				subtitleBackground.value = settings.background;
+			}
+
+			async function saveSubtitleStyle(setting, value) {
+				if (subtitleStyleOptions.disabled || subtitleStyle[setting] === value)
+					return;
+				savingSubtitleStyle = true;
+				subtitleStyleOptions.disabled = true;
+				subtitleStyleStatus.textContent = 'Applying…';
+				subtitleStyleStatus.hidden = false;
+				try {
+					await window.fs42Api.post(
+						`${subtitleStyleEndpoint}/${setting}/${value}`,
+					);
+					for (let attempt = 0; attempt < 8; attempt++) {
+						await new Promise((resolve) => setTimeout(resolve, 300));
+						const settings = await window.fs42Api.get(subtitleStyleEndpoint);
+						if (settings[setting] === value) {
+							showSubtitleStyle(settings);
+							subtitleStyleStatus.hidden = true;
+							return;
+						}
+					}
+					throw new Error('Could not confirm the subtitle setting.');
+				} catch (error) {
+					showSubtitleStyle(subtitleStyle);
+					subtitleStyleStatus.textContent = error.detail || error.message;
+				} finally {
+					savingSubtitleStyle = false;
+					subtitleStyleOptions.disabled = false;
+				}
+			}
+
+			for (const button of subtitlePositionButtons) {
+				button.addEventListener('click', () =>
+					saveSubtitleStyle(
+						'position',
+						Number(button.dataset.subtitlePosition),
+					),
+				);
+			}
+			subtitleBackground.addEventListener('change', () =>
+				saveSubtitleStyle('background', subtitleBackground.value),
+			);
+
+			async function openMediaTrackPicker(isAudio) {
+				const endpoint = isAudio
+					? 'player/mpv/audio-tracks'
+					: 'player/mpv/subtitles';
+				const trackLabel = isAudio ? 'audio tracks' : 'subtitles';
+				if (
+					mediaTrackPicker.open ||
+					mediaTrackPickerList.disabled ||
+					savingSubtitleStyle
+				)
+					return;
+				mediaTrackPickerTitle.textContent = isAudio
+					? 'Audio tracks'
+					: 'Subtitles';
+				subtitleStyleOptions.hidden = isAudio;
+				subtitleStyleOptions.disabled = true;
+				subtitleStyleStatus.hidden = true;
+				mediaTrackPickerList.replaceChildren();
+				mediaTrackPickerList.disabled = true;
+				mediaTrackPickerStatus.textContent = `Loading ${trackLabel}…`;
+				mediaTrackPicker.showModal();
+				try {
+					const { entry_id, tracks, selected_id } =
+						await window.fs42Api.get(endpoint);
+					mediaTrackPickerStatus.textContent = tracks.length
+						? ''
+						: `No ${trackLabel} available.`;
+					if (!tracks.length) return;
+					const options = isAudio
+						? tracks
+						: [{ id: null, title: 'Off' }, ...tracks];
+					for (const track of options) {
+						const button = document.createElement('button');
+						button.type = 'button';
+						button.className = 'remote-btn function-btn';
+						button.textContent =
+							[track.language, track.title].filter(Boolean).join(' · ') ||
+							`Track ${track.id}`;
+						if (track.id === selected_id)
+							button.setAttribute('aria-current', 'true');
+						button.addEventListener('click', () =>
+							selectMediaTrack(endpoint, entry_id, track.id),
+						);
+						mediaTrackPickerList.append(button);
+					}
+					if (!isAudio) {
+						try {
+							showSubtitleStyle(
+								await window.fs42Api.get(subtitleStyleEndpoint),
+							);
+							subtitleStyleOptions.disabled = false;
+						} catch (error) {
+							subtitleStyleStatus.textContent =
+								'Could not load subtitle settings.';
+							subtitleStyleStatus.hidden = false;
+						}
+					}
+				} catch (error) {
+					mediaTrackPickerStatus.textContent = `Could not load ${trackLabel}.`;
+				} finally {
+					mediaTrackPickerList.disabled = false;
+				}
+			}
+
+			async function selectMediaTrack(endpoint, entryId, trackId) {
+				if (mediaTrackPickerList.disabled) return;
+				mediaTrackPickerList.disabled = true;
+				mediaTrackPickerStatus.textContent = 'Applying selection…';
+				try {
+					const query = trackId === null ? '' : `?track_id=${trackId}`;
+					await window.fs42Api.post(`${endpoint}/${entryId}${query}`);
+					for (
+						let attempt = 0;
+						attempt < 8 && mediaTrackPicker.open;
+						attempt++
+					) {
+						await new Promise((resolve) => setTimeout(resolve, 300));
+						if (!mediaTrackPicker.open) return;
+						const { entry_id, selected_id } =
+							await window.fs42Api.get(endpoint);
+						if (entry_id !== entryId)
+							throw new Error('Playback changed. Reopen the track picker.');
+						if (selected_id === trackId) {
+							mediaTrackPicker.close();
+							return;
+						}
+					}
+					mediaTrackPickerStatus.textContent =
+						'Could not confirm the track selection.';
+				} catch (error) {
+					mediaTrackPickerStatus.textContent = error.detail || error.message;
+				} finally {
+					mediaTrackPickerList.disabled = false;
+				}
+			}
+
 			// Button press handler
 			document.querySelectorAll('.remote-btn').forEach((btn) => {
 				btn.addEventListener('click', function () {
@@ -2056,28 +2399,11 @@
 						toggleInfoMode();
 						break;
 					case 'subtitles':
-						try {
-							// Queue a non-interrupting MPV command; station_player.py
-							// cycles the selected subtitle track and displays its label.
-							await window.fs42Api.post('player/mpv/cycle-subtitles');
-							display.textContent = 'SUBTITLES';
-							console.log('Cycle subtitles command sent');
-						} catch (error) {
-							console.error('Cycle subtitles failed:', error);
-							display.textContent = 'ERROR';
-						}
-						break;
+						await openMediaTrackPicker(false);
+						return;
 					case 'audio':
-						try {
-							// Same path as subtitles, but cycling the active audio track.
-							await window.fs42Api.post('player/mpv/cycle-audio');
-							display.textContent = 'AUDIO';
-							console.log('Cycle audio command sent');
-						} catch (error) {
-							console.error('Cycle audio failed:', error);
-							display.textContent = 'ERROR';
-						}
-						break;
+						await openMediaTrackPicker(true);
+						return;
 					default:
 						display.textContent = key.toUpperCase();
 				}

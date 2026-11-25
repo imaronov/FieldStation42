@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Path
+from typing import Literal
 import json
 import os
 import subprocess
@@ -7,6 +8,7 @@ import re
 import platform
 from fs42.station_manager import StationManager
 from fs42.fs42_server.api.media import PROJECT_ROOT
+from fs42.subtitle_style import read_subtitle_style
 
 router = APIRouter(prefix="/player", tags=["player"])
 
@@ -285,6 +287,66 @@ async def mpv_toggle_subtitles(request: Request):
 async def mpv_cycle_subtitles(request: Request):
     """Cycle through available subtitle tracks for the active mpv player."""
     return await _queue_mpv_command(request, "cycle_subtitles")
+
+
+async def _mpv_tracks(status_key: str):
+    try:
+        status = await get_player_status()
+    except (OSError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=503, detail="Player status is temporarily unavailable.") from error
+    if status.get("status") == "playing" and not status.get("awaiting_pin"):
+        tracks = status.get(status_key)
+        if tracks:
+            return tracks
+    return {"entry_id": None, "tracks": [], "selected_id": None}
+
+
+async def _mpv_select_track(request: Request, is_audio: bool, entry_id: int, track_id: int | None):
+    tracks = await _mpv_tracks("audio_tracks" if is_audio else "subtitles")
+    if tracks["entry_id"] != entry_id:
+        raise HTTPException(status_code=409, detail="Playback changed. Reopen the track picker.")
+    if track_id is not None and all(track["id"] != track_id for track in tracks["tracks"]):
+        raise HTTPException(status_code=409, detail="That track is no longer available.")
+    selection = "off" if track_id is None else track_id
+    action = "select_audio" if is_audio else "select_subtitle"
+    return await _queue_mpv_command(request, f"{action}:{entry_id}:{selection}")
+
+
+@router.get("/mpv/subtitles")
+async def mpv_subtitles():
+    return await _mpv_tracks("subtitles")
+
+
+@router.post("/mpv/subtitles/{entry_id}")
+async def mpv_select_subtitle(request: Request, entry_id: int, track_id: int | None = None):
+    return await _mpv_select_track(request, False, entry_id, track_id)
+
+
+@router.get("/mpv/subtitle-style")
+async def mpv_subtitle_style():
+    return {"position": 100, "background": "none", **read_subtitle_style()}
+
+
+@router.post("/mpv/subtitle-style/position/{position}")
+async def mpv_subtitle_position(request: Request, position: int = Path(ge=0, le=100)):
+    return await _queue_mpv_command(request, f"subtitle_position:{position}")
+
+
+@router.post("/mpv/subtitle-style/background/{background}")
+async def mpv_subtitle_background(
+    request: Request, background: Literal["none", "translucent", "solid"]
+):
+    return await _queue_mpv_command(request, f"subtitle_background:{background}")
+
+
+@router.get("/mpv/audio-tracks")
+async def mpv_audio_tracks():
+    return await _mpv_tracks("audio_tracks")
+
+
+@router.post("/mpv/audio-tracks/{entry_id}")
+async def mpv_select_audio(request: Request, entry_id: int, track_id: int):
+    return await _mpv_select_track(request, True, entry_id, track_id)
 
 
 @router.get("/mpv/cycle-audio")

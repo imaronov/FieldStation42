@@ -26,6 +26,7 @@ from fs42.liquid_manager import PlayPoint, ScheduleNotFound
 from fs42.play_point_query import PlayPointQuery, SchedulePastEnd, ScheduleBeforeStart
 from fs42.station_manager import StationManager
 from fs42.slot_reader import SlotReader
+from fs42.subtitle_style import BACKGROUND_COLORS, SUBTITLE_STYLE_PATH, read_subtitle_style
 
 logging.basicConfig(format="%(asctime)s %(levelname)s:%(name)s:%(message)s", level=logging.INFO)
 
@@ -90,16 +91,19 @@ def update_pause_status(paused):
         logging.getLogger("FieldPlayer").warning(f"Could not update pause status: {e}")
 
 
-def update_playback_progress(position, duration):
-    """Store MPV progress without replacing the rest of the player status."""
+def update_playback_progress(position, duration, media_tracks=None):
+    """Store MPV progress and media tracks alongside the current player status."""
     status_socket = StationManager().server_conf["status_socket"]
     try:
         with open(status_socket, "r") as fp:
             status_obj = json.load(fp)
         if status_obj.get("status") != "playing":
             return
-        status_obj["playback_position"] = max(0.0, float(position))
-        status_obj["playback_duration"] = max(0.0, float(duration))
+        if duration is not None and duration > 0:
+            status_obj["playback_position"] = max(0.0, float(position))
+            status_obj["playback_duration"] = max(0.0, float(duration))
+        if media_tracks is not None:
+            status_obj.update(media_tracks)
         with open(status_socket, "w") as fp:
             json.dump(status_obj, fp)
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
@@ -251,6 +255,11 @@ class StationPlayer:
         self._active_afx = None
         self._pending_response = None
         self._next_progress_update = 0.0
+        for setting, value in read_subtitle_style().items():
+            try:
+                self._apply_subtitle_style(setting, value)
+            except Exception as error:
+                self._l.warning(f"Could not restore subtitle {setting}: {error}")
 
     def show_text(self, text, duration=4):
         self.mpv.command("show-text", text, duration)
@@ -268,10 +277,59 @@ class StationPlayer:
         try:
             position = self.mpv.time_pos
             duration = self.mpv.duration
-            if position is not None and duration is not None and duration > 0:
-                update_playback_progress(position, duration)
+            if position is not None:
+                update_playback_progress(position, duration, self._media_tracks())
         except Exception as e:
             self._l.debug(f"Could not read playback progress: {e}")
+
+    def _media_tracks(self):
+        try:
+            position = self.mpv.command("get_property", "playlist-playing-pos")
+            if position is None or position < 0:
+                return None
+            entry_id = self.mpv.command("get_property", f"playlist/{position}/id")
+            if not isinstance(entry_id, int):
+                return None
+            tracks = self.mpv.command("get_property", "track-list") or []
+            visible = self.mpv.command("get_property", "sub-visibility")
+        except Exception as error:
+            self._l.debug(f"Could not read media tracks: {error}")
+            return None
+        media_tracks = {}
+        for kind, status_key in (("sub", "subtitles"), ("audio", "audio_tracks")):
+            available = [track for track in tracks if track["type"] == kind]
+            selected_id = next((
+                track["id"] for track in available
+                if (kind == "audio" or visible) and track.get("selected")
+                and track.get("main-selection", 0) == 0
+            ), None)
+            media_tracks[status_key] = {
+                "entry_id": entry_id,
+                "tracks": [
+                    {"id": track["id"], "language": track.get("lang"), "title": track.get("title")}
+                    for track in available
+                ],
+                "selected_id": selected_id,
+            }
+        return media_tracks
+
+    def _select_media_track(self, action, entry_id, track_id):
+        is_audio = action == "select_audio"
+        if is_audio and track_id is None:
+            return False
+        media_tracks = self._media_tracks()
+        if not media_tracks:
+            return False
+        selection = media_tracks["audio_tracks" if is_audio else "subtitles"]
+        if selection["entry_id"] != entry_id:
+            return False
+        if track_id is not None and all(track["id"] != track_id for track in selection["tracks"]):
+            return False
+        self.mpv.command("set_property", "aid" if is_audio else "sid", "no" if track_id is None else track_id)
+        if not is_audio and track_id is not None:
+            self.mpv.command("set_property", "sub-visibility", True)
+        self._next_progress_update = 0
+        return True
 
     def _clear_ppv_pause(self):
         """Clear PPV pause state before starting content on a channel."""
@@ -280,8 +338,50 @@ class StationPlayer:
         except Exception as e:
             self._l.debug(f"Could not clear PPV pause state: {e}")
 
+    def _apply_subtitle_style(self, setting, value):
+        if setting == "position":
+            self.mpv.command("set_property", "sub-pos", value)
+            return
+
+        color = BACKGROUND_COLORS[value]
+        try:
+            border_style = self.mpv.command("get_property", "sub-border-style")
+        except Exception:
+            # Older mpv versions derive the box style from the background alpha.
+            border_style = None
+        if border_style is not None:
+            style = "outline-and-shadow" if value == "none" else "background-box"
+            self.mpv.command("set_property", "sub-border-style", style)
+        self.mpv.command("set_property", "sub-back-color", color)
+        self.mpv.command("set_property", "sub-shadow-offset", 0 if value == "none" else 3)
+
     def mpv_runtime_command(self, action):
         """Run a small set of user-facing mpv runtime commands."""
+        if action.startswith(("subtitle_position:", "subtitle_background:")):
+            try:
+                command, value = action.split(":", 1)
+                setting = command.removeprefix("subtitle_")
+                if setting == "position":
+                    value = int(value)
+                    if not 0 <= value <= 100:
+                        return False
+                self._apply_subtitle_style(setting, value)
+                settings = read_subtitle_style()
+                settings[setting] = value
+                pending = SUBTITLE_STYLE_PATH.with_suffix(".tmp")
+                pending.write_text(json.dumps(settings), encoding="utf-8")
+                pending.replace(SUBTITLE_STYLE_PATH)
+                return True
+            except Exception as error:
+                self._l.warning(f"Could not update subtitle appearance: {error}")
+                return False
+        if action.startswith(("select_subtitle:", "select_audio:")):
+            try:
+                command, entry_id, track_id = action.split(":")
+                return self._select_media_track(command, int(entry_id), None if track_id == "off" else int(track_id))
+            except Exception as error:
+                self._l.warning(f"Failed to select media track: {error}")
+                return False
         mpv_command = self.MPV_RUNTIME_COMMANDS.get(action)
         if not mpv_command:
             self._l.warning(f"Unknown mpv runtime command: {action}")
