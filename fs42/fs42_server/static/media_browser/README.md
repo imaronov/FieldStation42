@@ -102,6 +102,39 @@ Movie cards use a same-name local poster first. When local artwork or metadata i
 | OK | Apply the selected Library section, open movie details, open a show, open episode details, or activate Play in a detail view. |
 | Back | Return from item details to the episode browser or library, close show details, or return from a Movies or TV Shows grid to Home. |
 
+## Resolve ambiguous TVmaze matches
+
+Use this when **Normalize Naming** reports `Multiple TVmaze shows match … Set the
+TVmaze uniqueid in tvshow.nfo.` The error lists candidate shows with their
+premiere dates and IDs. This can happen even when the premiere year is already
+in the folder name or metadata.
+
+1. Search [TVmaze](https://www.tvmaze.com/) for your series and open its **show
+   page**. Check the premiere date and network against your files. You can also
+   use the candidate IDs listed in the error to open the corresponding shows.
+2. Copy the number immediately after `/shows/` in the show page URL. For
+   example, `https://www.tvmaze.com/shows/45563/dave` gives the ID `45563`.
+3. Open or create `tvshow.nfo` in the **show folder**, alongside the season
+   folders. For example, use `TV Shows/Your Show/tvshow.nfo` if the episodes are
+   under `TV Shows/Your Show/Season 1/`.
+4. Add a `uniqueid` element inside `<tvshow>`. The attribute `type="tvmaze"`
+   identifies the provider and the element text is the numeric show ID. Keep
+   existing IDs for other providers.
+
+```xml
+<tvshow>
+  <title>Your Show</title>
+  <uniqueid type="tvmaze">YOUR_SHOW_ID</uniqueid>
+</tvshow>
+```
+
+Replace `YOUR_SHOW_ID` with the number you copied. The exact ID takes precedence
+over title and year searches in both Normalize Naming and MyFlix. Rerun
+Normalize Naming to review the preview, or reload MyFlix to refresh its catalog.
+
+If the error is `No episode for … in the selected order`, see
+[Episode order](#episode-order) below.
+
 ## Episode order
 
 Normalize Naming and MyFlix use TVmaze's aired order by default. If a library

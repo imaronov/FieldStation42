@@ -6,6 +6,7 @@ import os
 import re
 import xml.etree.ElementTree as ET
 from contextlib import ExitStack
+from difflib import SequenceMatcher
 from pathlib import PurePosixPath
 from tempfile import TemporaryDirectory
 from threading import Lock
@@ -15,6 +16,7 @@ from pydantic import BaseModel
 from requests import RequestException
 
 from fs42.fs42_server.api.media import AUDIO_EXTENSIONS, PROJECT_ROOT, VIDEO_EXTENSIONS
+from fs42.nfo_agent import NFOAgent
 from fs42.station_manager import StationManager
 from .tmdb_helper import get_tmdb_helper
 from . import tvmaze_helper
@@ -50,6 +52,10 @@ class CreateLinkRequest(BaseModel):
 class RenameEntryRequest(BaseModel):
     path: str
     new_name: str
+
+
+class RenameSourceRequest(RenameEntryRequest):
+    mount: str
 
 
 class DeleteEntryRequest(BaseModel):
@@ -236,6 +242,34 @@ async def browse_source(mount: str, path: str = ""):
     return {"path": relative_path.replace(os.sep, "/"), "entries": entries}
 
 
+@router.get("/source/files")
+def list_source_files(mount: str, path: str = ""):
+    """List selectable media below a mounted-drive directory without following directory links."""
+    mount_root, directory, relative_path = _source_path(mount, path)
+    if not os.path.isdir(directory):
+        raise HTTPException(status_code=404, detail="Source directory not found.")
+
+    def raise_walk_error(error):
+        raise error
+
+    paths = []
+    try:
+        for current, directories, files in os.walk(directory, onerror=raise_walk_error):
+            directories[:] = sorted(name for name in directories if not name.startswith("."))
+            for name in sorted(files):
+                if name.startswith(".") or os.path.splitext(name)[1].lower() not in MEDIA_EXTENSIONS:
+                    continue
+                candidate = os.path.join(current, name)
+                if _inside(candidate, mount_root) and os.path.isfile(candidate):
+                    relative = os.path.join(relative_path, os.path.relpath(candidate, directory))
+                    paths.append(relative.replace(os.sep, "/"))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Permission denied while scanning this folder.") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail="Could not finish scanning this folder.") from exc
+    return {"paths": paths}
+
+
 @router.post("/tmdb/check")
 def check_source_with_tmdb(request: CheckTMDBRequest):
     """Look up one mounted-drive file or directory without exposing the API key."""
@@ -355,16 +389,20 @@ def check_source_with_tmdb(request: CheckTMDBRequest):
     }
 
 
-def _normalization_source(request):
+def _mounted_rename_source(request, extensions):
     mount, source, relative = _source_path(request.mount, request.path)
     if not relative or source != os.path.join(mount, relative) or os.path.ismount(source):
         raise HTTPException(status_code=400, detail="Choose an item directly on the mounted drive, outside symlinked directories.")
     if os.path.isdir(source):
         return source, ""
     extension = os.path.splitext(source)[1]
-    if os.path.isfile(source) and extension.lower() in VIDEO_EXTENSIONS:
+    if os.path.isfile(source) and extension.lower() in extensions:
         return source, extension
-    raise HTTPException(status_code=400, detail="Choose a folder or video file.")
+    raise HTTPException(status_code=400, detail="Choose a folder or a supported file type.")
+
+
+def _normalization_source(request):
+    return _mounted_rename_source(request, VIDEO_EXTENSIONS)
 
 
 def _normalization_token(source, name):
@@ -376,29 +414,147 @@ def _normalization_token(source, name):
     return hmac.new(NORMALIZATION_KEY, proposal, "sha256").hexdigest()
 
 
+def _parse_episode_code(code):
+    match = re.fullmatch(r"S(\d+)E(\d+)(.*)", code, re.I)
+    if match:
+        season, first, rest = match.groups()
+        numbers = [int(first)]
+        for separator, value in re.findall(r"(-E?|E)(\d+)", rest, re.I):
+            last = int(value)
+            if last <= numbers[-1]:
+                raise HTTPException(status_code=400, detail="Episode numbers must be in increasing order.")
+            if separator.startswith("-"):
+                numbers.extend(range(numbers[-1] + 1, last + 1))
+            else:
+                numbers.append(last)
+    elif code.isdecimal():
+        season, numbers = int(code[:-2]), [int(code[-2:])]
+    elif "." in code:
+        season, number = map(int, code.split("."))
+        numbers = [number]
+    else:
+        season, *numbers = map(int, re.split("x", code, flags=re.I))
+        if numbers != sorted(set(numbers)):
+            raise HTTPException(status_code=400, detail="Episode numbers must be in increasing order.")
+
+    if len(numbers) > 30:
+        raise HTTPException(status_code=400, detail="A single rename preview supports up to 30 episodes per file.")
+    season = int(season)
+    if len(numbers) > 1 and numbers == list(range(numbers[0], numbers[-1] + 1)):
+        formatted = f"S{season:02d}E{numbers[0]:02d}-E{numbers[-1]:02d}"
+    else:
+        formatted = f"S{season:02d}" + "".join(f"E{number:02d}" for number in numbers)
+    return season, numbers, formatted
+
+
+def _combined_episode_title(titles):
+    if len(titles) == 1:
+        return titles[0]
+    parts = [re.sub(r"(?:\s*[-,:]?\s+Part\s+\d+|\s*\((?:Part\s+)?\d+\))$", "", title, flags=re.I).rstrip() for title in titles]
+    if parts[0] and all(part.casefold() == parts[0].casefold() for part in parts):
+        return parts[0]
+    return " + ".join(dict.fromkeys(titles))
+
+
+def _filename_episode_titles(stem, episode):
+    title = stem[episode.end():].lstrip("] )-._")
+    release_tag = re.search(
+        r"[ ._-]+(?:\d{3,4}[pi]|web[ ._-]?(?:dl|rip)|blu[ ._-]?ray|hdtv|x26[45]|hevc)(?=$|[ ._-])",
+        title, re.I,
+    )
+    if release_tag:
+        title = title[:release_tag.start()]
+    return [" ".join(part.replace(".", " ").replace("_", " ").split())
+            for part in re.split(r"\.{2,}|\s+\+\s+", title) if part.strip()]
+
+
+def _match_broadcast_segments(episodes, numbers, filename_titles):
+    if len(numbers) != len(filename_titles) or not any("/" in (item.get("name") or "") for item in episodes):
+        return None
+    broadcast_episodes = sorted(
+        (item for item in episodes if type(item.get("number")) is int and item["number"] > 0),
+        key=lambda item: item["number"],
+    )
+    if [item["number"] for item in broadcast_episodes] != list(range(1, len(broadcast_episodes) + 1)):
+        return None
+    segments = [title.strip() for item in broadcast_episodes for title in (item.get("name") or "").split("/")]
+    if not all(segments) or not all(1 <= number <= len(segments) for number in numbers):
+        return None
+
+    def key(title):
+        return tvmaze_helper.title_key(re.sub(r"^the\s+", "", title, flags=re.I))
+
+    def words_without_articles(title):
+        return tuple(word for word in re.findall(r"\w+", title.casefold()) if word not in {"a", "an", "the", "of"})
+
+    selected = [segments[number - 1] for number in numbers]
+    for filename_title, selected_title in zip(filename_titles, selected):
+        left, right = key(filename_title), key(selected_title)
+        # A title variant can omit short connecting words, but the remaining
+        # words and the segment position must agree.
+        words = words_without_articles(filename_title)
+        if len(words) >= 2 and words == words_without_articles(selected_title):
+            continue
+        if left != right and (min(len(left), len(right)) < 12 or SequenceMatcher(None, left, right).ratio() < 0.94):
+            return None
+    return selected
+
+
+def _unique_episode_title_match(episodes, title):
+    key = tvmaze_helper.title_key(title)
+    matches = [item for item in episodes
+               if type(item.get("number")) is int and item.get("name")
+               and key and tvmaze_helper.title_key(item["name"]) == key]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _tvshow_nfo_query(folder, folder_title):
+    try:
+        with open(os.path.join(folder, "tvshow.nfo"), encoding="utf-8") as file:
+            metadata = NFOAgent.parse_nfo_string(file.read()) or {}
+    except (OSError, UnicodeError):
+        return None
+    if metadata.get("type") != "tvshow":
+        return None
+    id_query = tvmaze_helper.show_id_query(metadata)
+    if id_query:
+        return id_query
+    year = str(metadata.get("year") or "").strip()
+    if not re.fullmatch(r"\d{4}", year):
+        return None
+    title = (metadata.get("title") or "").strip() or folder_title
+    return f"{re.sub(r' [(][0-9]{4}[)]$', '', title)} ({year})"
+
+
 def _tvmaze_episode_name(source, stem, episode):
     folder = os.path.dirname(source)
-    season_folder = re.fullmatch(r"season[ ._-]*(\d+)", os.path.basename(folder), re.I)
+    season_folder = re.fullmatch(r"season(?:[ ._-]*(\d+))?", os.path.basename(folder), re.I)
     show_folder = os.path.dirname(folder) if season_folder else folder
     folder_title = os.path.basename(show_folder)
     try:
-        queries = [folder_title]
+        queries = [folder_title] if re.search(r"\(\d{4}\)$", folder_title) else []
+        nfo_query = _tvshow_nfo_query(show_folder, folder_title)
+        queries.append(nfo_query)
+        filename_query = None
         if episode:
-            code = episode.group(1)
-            numbers = re.fullmatch(r"S(\d+)E(\d+)", code, re.I) or re.fullmatch(r"(\d+)x(\d+)", code, re.I)
-            if not numbers:
-                raise HTTPException(status_code=400, detail="A file containing multiple episodes has no single episode title.")
-            season, number = map(int, numbers.groups())
+            season, numbers, code = _parse_episode_code(episode.group(1))
             prefix = stem[:episode.start()].strip(" ._-").rstrip("[(").rstrip()
             remix_prefix = re.sub(r"\s*\(\d{4}\)\s*$", "", prefix)
             is_remix = bool(re.search(r"(?:^|[ ._-])remix$", remix_prefix, re.I))
-            if not season_folder:
-                queries.append(re.sub(r"[ ._-]+remix(?=\s*\(\d{4}\)$|$)", "", prefix, flags=re.I).replace(".", " "))
+            filename_query = re.sub(r"[ ._-]+remix(?=\s*\(\d{4}\)$|$)", "", prefix, flags=re.I).replace(".", " ")
+            if re.search(r"\(\d{4}\)$", filename_query):
+                queries.append(filename_query)
+        queries.append(folder_title)
+        if not season_folder:
+            queries.append(filename_query)
+        if nfo_query and nfo_query.startswith("tvmaze:"):
+            queries = [nfo_query]
 
         for query in dict.fromkeys(filter(None, queries)):
             matches = tvmaze_helper.search_shows(query)
             if len(matches) > 1:
-                raise HTTPException(status_code=409, detail=f"Multiple TVmaze shows match {query}. Include the premiere year in the show folder name.")
+                options = ", ".join(f"{item['name']} ({item.get('premiered') or 'unknown date'}, ID {item['id']})" for item in matches)
+                raise HTTPException(status_code=409, detail=f"Multiple TVmaze shows match {query}: {options}. Set the TVmaze uniqueid in tvshow.nfo.")
             if matches:
                 show = matches[0]
                 break
@@ -411,37 +567,41 @@ def _tvmaze_episode_name(source, stem, episode):
 
         config = StationManager().server_conf
         if episode:
+            filename_titles = _filename_episode_titles(stem, episode)
             if is_remix and not re.search(r"\bremix$", show["name"], re.I):
                 # A recut can reuse an aired episode code for a different title.
-                title = stem[episode.end():].lstrip("] )-._")
-                release_tag = re.search(
-                    r"[ ._-]+(?:\d{3,4}[pi]|web[ ._-]?(?:dl|rip)|blu[ ._-]?ray|hdtv|x26[45]|hevc)(?=$|[ ._-])",
-                    title, re.I,
-                )
-                if release_tag:
-                    title = title[:release_tag.start()]
-                title = " ".join(title.replace(".", " ").replace("_", " ").split())
-                if not title:
+                if not filename_titles:
                     raise HTTPException(status_code=404, detail="This remix filename needs an episode title after its episode code.")
-                return f"{show['name']} Remix", year, f"S{season:02d}E{number:02d}", title
-            result = tvmaze_helper.get_episode(show, season, number, config)
-            if result and result.get("name"):
-                return show["name"], year, f"S{season:02d}E{number:02d}", result["name"]
-            raise HTTPException(status_code=404, detail=f"No episode for {folder_title} {episode.group(1).upper()} in the selected order. Check episode_orders in main_config.json.")
+                return f"{show['name']} Remix", year, code, " + ".join(filename_titles)
+            configured_orders = config.get("episode_orders", {})
+            if (len(filename_titles) == len(numbers) and isinstance(configured_orders, dict)
+                    and str(show["id"]) not in configured_orders):
+                episode_list = tvmaze_helper.season_episodes(show, season, config)
+                segments = _match_broadcast_segments(episode_list, numbers, filename_titles)
+                if segments:
+                    return show["name"], year, code, _combined_episode_title(segments)
+                if len(numbers) == 1:
+                    title_match = _unique_episode_title_match(episode_list, filename_titles[0])
+                    if title_match:
+                        return show["name"], year, code, title_match["name"]
+            titles = []
+            for number in numbers:
+                result = tvmaze_helper.get_episode(show, season, number, config)
+                if not result or not result.get("name"):
+                    raise HTTPException(status_code=404, detail=f"No episode for {folder_title} S{season:02d}E{number:02d} in the selected order. Check episode_orders in main_config.json.")
+                titles.append(result["name"])
+            return show["name"], year, code, _combined_episode_title(titles)
 
         season = int(season_folder[1])
         title = re.sub(r"\s+\(\d{4}\)$", "", stem.strip(" ._-"))
-        candidates = [item for item in tvmaze_helper.season_episodes(show, season, config)
-                      if type(item.get("number")) is int
-                      and item.get("name") and tvmaze_helper.title_key(item["name"]) == tvmaze_helper.title_key(title)]
-        if len(candidates) == 1:
-            item = candidates[0]
+        item = _unique_episode_title_match(tvmaze_helper.season_episodes(show, season, config), title)
+        if item:
             return show["name"], year, f"S{season:02d}E{item['number']:02d}", item["name"]
         raise HTTPException(status_code=404, detail=f"No unique episode title match in {folder_title} season {season} in the selected order.")
     except tvmaze_helper.EpisodeOrderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RequestException as exc:
-        raise HTTPException(status_code=502, detail="Episode provider lookup failed. Check credentials and connection.") from exc
+        raise HTTPException(status_code=502, detail=tvmaze_helper.provider_error_detail(exc)) from exc
 
 
 def _safe_media_title(title):
@@ -460,7 +620,24 @@ def preview_tmdb_name(request: CheckTMDBRequest):
         r"(?<![a-z0-9])(S\d{1,3}E\d{1,3}(?:E\d{1,3}|-E?\d{1,3})*(?!\d)|\d{1,3}x\d{1,3}(?:x\d{1,3})*(?![a-z0-9]))",
         stem, re.I,
     ) if extension else None
-    in_season = extension and re.fullmatch(r"season[ ._-]*\d+", os.path.basename(os.path.dirname(source)), re.I)
+    season_directory = os.path.dirname(source)
+    in_season = extension and re.fullmatch(r"season[ ._-]*(\d+)", os.path.basename(season_directory), re.I)
+    if not episode and in_season:
+        bracketed = re.search(r"\[(\d{1,3}\.\d{2,3})\]", stem)
+        if bracketed:
+            season, number = map(int, bracketed[1].split("."))
+            if season == int(in_season[1]) and number > 0:
+                episode = bracketed
+    if not episode and in_season:
+        # Compact codes such as Show901 are only meaningful in a matching show and season folder.
+        show_folder = os.path.basename(os.path.dirname(season_directory))
+        show_title = re.sub(r"\s*\(\d{4}\)$", "", show_folder)
+        for candidate in re.finditer(r"(?<!\d)(\d{3,4})(?=$|[ ._-])", stem):
+            compact = candidate[1]
+            if (int(compact[:-2]) == int(in_season[1]) and int(compact[-2:]) > 0
+                    and tvmaze_helper.title_key(stem[:candidate.start()]) == tvmaze_helper.title_key(show_title)):
+                episode = candidate
+                break
     if episode or in_season:
         series, year, code, title = _tvmaze_episode_name(source, stem, episode)
         name = f"{_safe_media_title(series)} ({year}) - {code} - {_safe_media_title(title)}"
@@ -486,11 +663,28 @@ def normalize_tmdb_name(request: NormalizeTMDBRequest):
 
 def _normalize_tmdb_name(request):
     source, extension = _normalization_source(request)
-    name = _safe_name(request.name)
-    if re.search(r'[<>:"|?*\x00-\x1f]', name) or name.endswith(".") or not name.endswith(extension):
-        raise HTTPException(status_code=400, detail="Invalid name or changed file extension.")
+    name = _mounted_rename_name(request.name, extension)
     if not hmac.compare_digest(request.token.encode(), _normalization_token(source, name).encode()):
         raise HTTPException(status_code=409, detail="The preview is stale. Preview this item again.")
+    return _rename_mounted_item(source, name)
+
+
+@router.post("/source/rename")
+def rename_source(request: RenameSourceRequest):
+    with NORMALIZATION_LOCK:
+        source, extension = _mounted_rename_source(request, MEDIA_EXTENSIONS | METADATA_EXTENSIONS | {".json"})
+        name = _mounted_rename_name(request.new_name, extension)
+        return _rename_mounted_item(source, name)
+
+
+def _mounted_rename_name(new_name, extension):
+    name = _safe_name(new_name)
+    if re.search(r'[<>:"|?*\x00-\x1f]', name) or name.endswith(".") or not name.endswith(extension):
+        raise HTTPException(status_code=400, detail="Invalid name or changed file extension.")
+    return name
+
+
+def _rename_mounted_item(source, name):
     destination = os.path.join(os.path.dirname(source), name)
     if destination == source:
         return {"name": name, "links_updated": 0}

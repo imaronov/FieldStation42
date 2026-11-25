@@ -164,13 +164,19 @@ def _episode_numbers(metadata, path):
 
 def _episode_title_from_filename(path):
     stem = os.path.splitext(os.path.basename(path))[0]
-    normalized = re.fullmatch(r".+ \(\d{4}\) - S\d{1,3}E\d{1,3} - (.+)", stem, re.I)
+    normalized = re.fullmatch(r".+ \(\d{4}\) - S\d{1,3}E\d{1,3}(?:(?:-E|E)\d{1,3})* - (.+)", stem, re.I)
     return normalized[1] if normalized else stem
 
 
 def _scan_show_directory(channel_number, library, show_directory, loose_files=None):
     show_metadata = _read_tvshow_nfo(show_directory)
     show_title = show_metadata.get("title") or os.path.basename(os.path.normpath(show_directory))
+    show_year = str(show_metadata.get("year") or "")
+    if re.fullmatch(r"\d{4}", show_year) and not re.search(r"\(\d{4}\)$", show_title):
+        tvmaze_show_query = f"{show_title} ({show_year})"
+    else:
+        tvmaze_show_query = show_title
+    tvmaze_id_query = tvmaze_helper.show_id_query(show_metadata)
     episode_paths = list(loose_files or [])
     if not loose_files:
         for directory, _, filenames in os.walk(show_directory, followlinks=True):
@@ -190,12 +196,12 @@ def _scan_show_directory(channel_number, library, show_directory, loose_files=No
         relative_path = quote(os.path.relpath(path, library["path"]).replace(os.sep, "/"), safe="/")
         media_url = f"{library['id']}/{relative_path}"
         series = metadata.get("show_title") or show_title
-        filename_series = re.match(r"(.+ \(\d{4}\)) - S\d{1,3}E\d{1,3}(?: - |\.)", os.path.basename(path), re.I)
+        filename_series = re.match(r"(.+ \(\d{4}\)) - S\d{1,3}E\d{1,3}(?:(?:-E|E)\d{1,3})*(?: - |\.)", os.path.basename(path), re.I)
         episode_item.update(
             {
                 "type": "episode",
                 "show_title": series,
-                "tvmaze_query": filename_series[1] if filename_series else series,
+                "tvmaze_query": tvmaze_id_query or (filename_series[1] if filename_series else tvmaze_show_query if not loose_files else series),
                 "season": season_number,
                 "episode": episode_number,
                 "title": fields.get("title") or _episode_title_from_filename(path),

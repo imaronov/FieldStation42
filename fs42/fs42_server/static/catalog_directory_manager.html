@@ -52,10 +52,12 @@
 						><button id="source-refresh" class="pure-button">Refresh</button
 						><button id="export-to-drive" class="pure-button">
 							Export links here</button
-						><span id="source-selection">No media selected</span
-						><button id="source-select-all" class="pure-button cdm-select-all">
-							Select all
-						</button>
+						><span id="source-selection">No media selected</span>
+						<div class="cdm-selection-tools">
+							<button id="source-select-all" type="button" class="pure-button">Select all</button>
+							<button id="source-select-all-files" type="button" class="pure-button" title="Select media files in this folder and its subfolders" disabled>Select All Files</button>
+							<button id="source-deselect-all" type="button" class="pure-button" disabled>Deselect all</button>
+						</div>
 					</div>
 					<div class="tmdb-tools">
 						<button
@@ -68,6 +70,10 @@
 						<button id="normalize-tmdb" type="button" class="pure-button" disabled>
 							Normalize Naming
 						</button>
+					</div>
+					<div id="normalize-status" class="cdm-normalize-status" hidden>
+						<label id="normalize-progress-label" for="normalize-progress" role="status"></label>
+						<progress id="normalize-progress" max="1" value="0"></progress>
 					</div>
 					<div id="source-list" class="cdm-list"></div>
 				</section>
@@ -225,6 +231,8 @@
 					sourcePath: '',
 					catalogPath: '',
 					selectedSources: new Set(),
+					renameInProgress: false,
+					sourceFilesScan: null,
 					selectedDirectories: new Set(),
 					normalizing: false,
 					pendingStationPath: '',
@@ -304,7 +312,7 @@
 					await loadSource();
 				}
 				let sourceRequest = 0;
-				async function loadSource() {
+				async function loadSource({ focusFolder } = {}) {
 					const requestId = ++sourceRequest;
 					if (!state.mount) return;
 					try {
@@ -320,17 +328,21 @@
 							`${state.mount}${state.sourcePath ? '/' + state.sourcePath : ''}`;
 						$('source-list').innerHTML = data.entries.length
 							? data.entries
-									.map((entry) =>
-										entry.type === 'directory'
+									.map((entry) => {
+										const content = entry.type === 'directory'
 											? `<div class="cdm-source-folder-row"><button class="cdm-entry cdm-folder cdm-source-folder-open" data-source-folder="${esc(entry.name)}"><span class="cdm-icon">📁</span><span>${esc(entry.name)}</span></button><button class="cdm-entry cdm-source-dir ${state.selectedSources.has(join(state.sourcePath, entry.name)) ? 'is-selected' : ''}" data-source-dir="${esc(entry.name)}" aria-pressed="${state.selectedSources.has(join(state.sourcePath, entry.name))}" title="Select directory for catalog links or MovieDB downloads"><span class="cdm-icon">${state.selectedSources.has(join(state.sourcePath, entry.name)) ? '☑' : '☐'}</span><span>Select folder</span></button></div>`
 											: entry.type === 'catalog-export'
 												? `<div class="cdm-entry cdm-drive-export"><span class="cdm-icon">📦</span><span class="cdm-drive-export-name" title="${esc(entry.name)}">${esc(entry.name)}</span><button class="pure-button cdm-small" data-import-drive-file="${esc(entry.name)}">Import links</button></div>`
 												: entry.type === 'metadata'
 													? `<div class="cdm-entry cdm-metadata"><span class="cdm-icon">${entry.kind === 'artwork' ? '🖼️' : '📄'}</span><span>${esc(entry.name)}</span><span class="cdm-entry-detail">${entry.kind === 'artwork' ? 'Artwork' : 'NFO metadata'}</span></div>`
-													: `<button class="cdm-entry cdm-media ${state.selectedSources.has(join(state.sourcePath, entry.name)) ? 'is-selected' : ''}" data-source-file="${esc(entry.name)}" aria-pressed="${state.selectedSources.has(join(state.sourcePath, entry.name))}"><span class="cdm-icon">${state.selectedSources.has(join(state.sourcePath, entry.name)) ? '☑' : '☐'}</span><span>${esc(entry.name)}</span></button>`,
-									)
+													: `<button class="cdm-entry cdm-media ${state.selectedSources.has(join(state.sourcePath, entry.name)) ? 'is-selected' : ''}" data-source-file="${esc(entry.name)}" aria-pressed="${state.selectedSources.has(join(state.sourcePath, entry.name))}"><span class="cdm-icon">${state.selectedSources.has(join(state.sourcePath, entry.name)) ? '☑' : '☐'}</span><span>${esc(entry.name)}</span></button>`;
+										return `<div class="cdm-source-entry-row">${content}<span class="cdm-row-actions"><button class="pure-button cdm-small" type="button" aria-label="Rename ${esc(entry.name)}" data-source-rename="${esc(entry.name)}">Rename</button></span></div>`;
+									})
 									.join('')
 							: '<div class="cdm-empty">No media files or folders here.</div>';
+						$('source-list').querySelectorAll('[data-source-rename]').forEach((button) => {
+							button.onclick = () => renameSourceItem(join(data.path, button.dataset.sourceRename));
+						});
 						$('source-list')
 							.querySelectorAll('[data-source-folder]')
 							.forEach(
@@ -389,11 +401,21 @@
 										);
 									}),
 							);
+						if (focusFolder) {
+							const button = Array.from($('source-list').querySelectorAll('[data-source-folder]'))
+								.find((entry) => entry.dataset.sourceFolder === focusFolder);
+							if (button) {
+								button.focus({ preventScroll: true });
+								button.scrollIntoView({ block: 'nearest' });
+							}
+						}
 					} catch (error) {
 						if (requestId !== sourceRequest) return;
 						message(error.detail || error.message || 'Request failed.', true);
 						$('source-list').innerHTML =
 							'<div class="cdm-empty">Could not load this drive directory.</div>';
+					} finally {
+						if (requestId === sourceRequest) updateSelection();
 					}
 				}
 				async function loadCatalog() {
@@ -511,52 +533,114 @@
 						: 'No media selected';
 					$('create-link').disabled = count === 0;
 					$('clear-selection').disabled = count === 0;
-					$('normalize-tmdb').disabled = count === 0 || state.normalizing;
+					$('source-deselect-all').disabled = count === 0 && !state.sourceFilesScan;
+					$('normalize-tmdb').disabled = count === 0 || state.normalizing || state.renameInProgress;
+					$('source-list').querySelectorAll('[data-source-rename]').forEach((button) => {
+						button.disabled = state.normalizing || state.renameInProgress;
+					});
+					$('source-select-all-files').disabled = !state.mount || Boolean(state.sourceFilesScan);
 					$('create-link').textContent = count
 						? `Create ${count} link${count === 1 ? '' : 's'} in catalog →`
 						: 'Create link in catalog →';
 				}
 				function clearSourceSelection() {
+					if (state.sourceFilesScan) message('');
+					state.sourceFilesScan = null;
 					state.selectedSources.clear();
 					state.selectedDirectories.clear();
 					updateSelection();
 				}
-				function navigateSource(path, mount = state.mount) {
+				function navigateSource(path, mount = state.mount, focusFolder) {
 					if (path === state.sourcePath && mount === state.mount) return;
+					const changedDrive = mount !== state.mount;
 					state.mount = mount;
 					state.sourcePath = path;
-					clearSourceSelection();
+					if (changedDrive) clearSourceSelection();
 					$('source-list').replaceChildren();
-					loadSource();
+					updateSelection();
+					loadSource({ focusFolder });
 				}
 				$('drive-select').addEventListener('change', (event) => {
 					navigateSource('', event.target.value);
 				});
-				$('clear-selection').onclick = () => {
+				function deselectAllSources() {
 					clearSourceSelection();
 					loadSource();
-				};
+				}
+				$('clear-selection').onclick = deselectAllSources;
+				$('source-deselect-all').onclick = deselectAllSources;
 				$('source-up').onclick = () => {
-					navigateSource(state.sourcePath.split('/').slice(0, -1).join('/'));
+					const parts = state.sourcePath.split('/');
+					const folder = parts.pop();
+					if (folder) navigateSource(parts.join('/'), state.mount, folder);
 				};
 				$('source-refresh').onclick = loadSource;
+				function remapSourcePaths(mount, path, destination) {
+					if (state.mount !== mount) return;
+					const movePath = (value) => value === path || value.startsWith(`${path}/`)
+						? destination + value.slice(path.length)
+						: value;
+					state.sourcePath = movePath(state.sourcePath);
+					state.selectedSources = new Set([...state.selectedSources].map(movePath));
+					state.selectedDirectories = new Set([...state.selectedDirectories].map(movePath));
+				}
+				async function renameSourceItem(path) {
+					if (!state.mount || state.normalizing || state.renameInProgress) return;
+					const mount = state.mount;
+					const nameStart = path.lastIndexOf('/') + 1;
+					const oldName = path.slice(nameStart);
+					const newName = prompt('New name:', oldName)?.trim();
+					if (!newName || newName === oldName) return;
+					state.renameInProgress = true;
+					updateSelection();
+					try {
+						const result = await request('post', 'catalog-directory/source/rename', { mount, path, new_name: newName });
+						remapSourcePaths(mount, path, path.slice(0, nameStart) + result.name);
+						await Promise.all([loadCatalog(), state.mount === mount ? loadSource() : undefined]);
+						message(`Renamed to “${result.name}”. Catalog links updated: ${result.links_updated}.`);
+					} catch (_) {
+						// request() displays the error returned by the server.
+					} finally {
+						state.renameInProgress = false;
+						updateSelection();
+					}
+				}
+				function currentSourceItems() {
+					return Array.from($('source-list').querySelectorAll('[data-source-dir], [data-source-file]'), ({ dataset }) => ({
+						path: join(state.sourcePath, dataset.sourceDir ?? dataset.sourceFile),
+						isDirectory: dataset.sourceDir !== undefined,
+					}));
+				}
 				$('source-select-all').onclick = () => {
-					$('source-list')
-						.querySelectorAll('[data-source-dir]')
-						.forEach((button) => {
-							const source = join(state.sourcePath, button.dataset.sourceDir);
-							state.selectedSources.add(source);
-							state.selectedDirectories.add(source);
-						});
-					$('source-list')
-						.querySelectorAll('[data-source-file]')
-						.forEach((button) => {
-							state.selectedSources.add(
-								join(state.sourcePath, button.dataset.sourceFile),
-							);
-						});
+					for (const { path, isDirectory } of currentSourceItems()) {
+						state.selectedSources.add(path);
+						if (isDirectory) state.selectedDirectories.add(path);
+					}
 					updateSelection();
 					loadSource();
+				};
+				$('source-select-all-files').onclick = async () => {
+					if (!state.mount || state.sourceFilesScan) return;
+					const scan = { mount: state.mount, path: state.sourcePath };
+					state.sourceFilesScan = scan;
+					updateSelection();
+					message('Finding media files in this folder and its subfolders…');
+					try {
+						const { paths } = await window.fs42Api.get(queryPath('catalog-directory/source/files', scan));
+						if (state.sourceFilesScan !== scan) return;
+						const before = state.selectedSources.size;
+						for (const path of paths) state.selectedSources.add(path);
+						const added = state.selectedSources.size - before;
+						message(paths.length ? `Added ${added} of ${paths.length} media files to the selection.` : 'No media files found in this folder or its subfolders.');
+						await loadSource();
+					} catch (error) {
+						if (state.sourceFilesScan === scan) message(error.detail || error.message, true);
+					} finally {
+						if (state.sourceFilesScan === scan) {
+							state.sourceFilesScan = null;
+							updateSelection();
+						}
+					}
 				};
 				$('check-tmdb').onclick = async () => {
 					if (!state.mount) {
@@ -614,33 +698,58 @@
 						button.textContent = originalLabel;
 					}
 				};
-				$('normalize-tmdb').onclick = async () => {
+				function showNormalizeProgress(phase, completed, total) {
+					const progress = $('normalize-progress');
+					progress.max = total;
+					progress.value = completed;
+					$('normalize-progress-label').textContent = `${phase} · ${completed} of ${total}`;
+					$('normalize-status').hidden = false;
+				}
+
+				async function previewRenames(mount, paths) {
+					const previews = new Array(paths.length);
+					let next = 0;
+					let completed = 0;
+					showNormalizeProgress('Normalizing Naming', 0, paths.length);
+					async function lookup() {
+						while (next < paths.length) {
+							const index = next++;
+							const path = paths[index];
+							try {
+								const { name, token } = await window.fs42Api.post(
+									'catalog-directory/tmdb/normalize/preview', { mount, path },
+								);
+								const destination = path.slice(0, path.lastIndexOf('/') + 1) + name;
+								previews[index] = { path, name, destination, token };
+							} catch (error) {
+								previews[index] = { problem: `${path} — ${error.detail || error.message}` };
+							}
+							showNormalizeProgress('Normalizing Naming', ++completed, paths.length);
+						}
+					}
+					await Promise.all(Array.from({ length: Math.min(3, paths.length) }, lookup));
+					return previews;
+				}
+
+				async function normalizeNames(sourcePaths) {
 					const mount = state.mount;
-					const paths = [...state.selectedSources].sort(
+					const paths = [...sourcePaths].sort(
 						(a, b) => b.split('/').length - a.split('/').length,
 					);
-					if (!mount || !paths.length || state.normalizing) return;
+					if (!mount || !paths.length || state.normalizing || state.renameInProgress) return;
 					state.normalizing = true;
 					updateSelection();
+					message('');
 					const changes = [];
 					const problems = [];
 					let unchanged = 0;
 					let renamed = 0;
 					let linksUpdated = 0;
 					try {
-						for (const [index, path] of paths.entries()) {
-							message(`Finding TMDB names (${index + 1} of ${paths.length})…`);
-							try {
-								const { name, token } = await window.fs42Api.post(
-									'catalog-directory/tmdb/normalize/preview', { mount, path },
-								);
-								const slash = path.lastIndexOf('/');
-								const destination = path.slice(0, slash + 1) + name;
-								if (destination === path) unchanged++;
-								else changes.push({ path, name, destination, token });
-							} catch (error) {
-								problems.push(`${path} — ${error.detail || error.message}`);
-							}
+						for (const preview of await previewRenames(mount, paths)) {
+							if (preview.problem) problems.push(preview.problem);
+							else if (preview.destination === preview.path) unchanged++;
+							else changes.push(preview);
 						}
 						if (changes.length) {
 							const preview = $('normalize-preview');
@@ -666,37 +775,37 @@
 								return item;
 							}));
 							preview.returnValue = 'cancel';
+							$('normalize-status').hidden = true;
 							preview.showModal();
 							await new Promise((resolve) => preview.addEventListener('close', resolve, { once: true }));
 							if (preview.returnValue !== 'rename') {
 								message('Naming normalization canceled.');
 								return;
 							}
+							let processed = 0;
+							showNormalizeProgress('Renaming files', processed, changes.length);
 							for (const { path, name, destination, token } of changes) {
 								try {
 									const result = await window.fs42Api.post('catalog-directory/tmdb/normalize', { mount, path, name, token });
 									renamed++;
 									linksUpdated += result.links_updated || 0;
-									if (state.mount === mount) {
-										const movePath = (value) => value === path || value.startsWith(`${path}/`)
-											? destination + value.slice(path.length)
-											: value;
-										state.sourcePath = movePath(state.sourcePath);
-										state.selectedSources = new Set([...state.selectedSources].map(movePath));
-										state.selectedDirectories = new Set([...state.selectedDirectories].map(movePath));
-									}
+									remapSourcePaths(mount, path, destination);
 								} catch (error) {
 									problems.push(`${path} — ${error.detail || error.message}`);
+								} finally {
+									showNormalizeProgress('Renaming files', ++processed, changes.length);
 								}
 							}
 							await Promise.all([loadCatalog(), state.mount === mount ? loadSource() : undefined]);
 						}
 						message(`${renamed} renamed, ${linksUpdated} catalog links updated, ${unchanged} already normalized, ${problems.length} skipped.`, problems.length > 0, problems);
 					} finally {
+						$('normalize-status').hidden = true;
 						state.normalizing = false;
 						updateSelection();
 					}
-				};
+				}
+				$('normalize-tmdb').onclick = () => normalizeNames(state.selectedSources);
 				$('export-to-drive').onclick = async () => {
 					if (!state.mount) {
 						message('Select a mounted drive first.', true);

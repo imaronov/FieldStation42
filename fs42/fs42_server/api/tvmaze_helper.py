@@ -1,6 +1,7 @@
 """TVmaze show and episode lookups."""
 
 import re
+from time import sleep
 from functools import lru_cache
 
 import requests
@@ -19,23 +20,61 @@ def title_key(title):
 
 
 def _get(path, **params):
-    response = requests.get(f"{BASE_URL}{path}", params=params, timeout=5)
-    if response.status_code == 404:
-        return None
-    response.raise_for_status()
-    return response.json()
+    for attempt in range(3):
+        delay = (2, 5, 0)[attempt]
+        try:
+            response = requests.get(f"{BASE_URL}{path}", params=params, timeout=5)
+        except (requests.Timeout, requests.ConnectionError):
+            if not delay:
+                raise
+        else:
+            if response.status_code == 404:
+                return None
+            if not delay or response.status_code not in {429, 502, 503, 504}:
+                response.raise_for_status()
+                return response.json()
+            retry_after = response.headers.get("Retry-After", "")
+            if retry_after.isdecimal():
+                delay = max(delay, int(retry_after))
+                if delay > 10:
+                    response.raise_for_status()
+        sleep(delay)
+
+
+def provider_error_detail(error):
+    response = error.response
+    if response is not None:
+        if response.status_code == 429:
+            return "Episode provider rate limit reached (HTTP 429). Retry the skipped items shortly."
+        if response.status_code in {401, 403}:
+            return f"Episode provider rejected the request (HTTP {response.status_code}). Check provider access and credentials if required."
+        return f"Episode provider returned HTTP {response.status_code}."
+    if isinstance(error, requests.Timeout):
+        return "Episode provider request timed out."
+    if isinstance(error, requests.ConnectionError):
+        return "Could not connect to the episode provider."
+    return "Episode provider request failed."
 
 
 @lru_cache(maxsize=128)
 def search_shows(query):
+    if re.fullmatch(r"tvmaze:[1-9]\d{0,9}", query):
+        show = _get(f"/shows/{query.split(':', 1)[1]}")
+        return (show,) if show else ()
     match = re.fullmatch(r"(.+?)\s*\((\d{4})\)", query)
     title, year = match.groups() if match else (query, None)
     shows = (item["show"] for item in _get("/search/shows", q=title) or [])
-    return tuple(
-        show for show in shows
+    matches = {
+        show["id"]: show for show in shows
         if title_key(show["name"]) == title_key(title)
         and (not year or (show.get("premiered") or "")[:4] == year)
-    )
+    }
+    return tuple(matches.values())
+
+
+def show_id_query(metadata):
+    show_id = str(metadata.get("tvmaze_id") or "")
+    return f"tvmaze:{show_id}" if re.fullmatch(r"[1-9]\d{0,9}", show_id) else None
 
 
 @lru_cache(maxsize=512)
@@ -99,6 +138,10 @@ def season_episodes(show, season, config):
 def get_episode(show, season, number, config, *, include_metadata=False):
     order = _order(show, config)
     if order is None:
+        if not include_metadata:
+            matches = [item for item in list_episodes(show["id"])
+                       if item.get("season") == season and item.get("number") == number]
+            return matches[0] if len(matches) == 1 else None
         return _aired_episode(show["id"], season, number)
 
     matches = [item for item in season_episodes(show, season, config) if item.get("number") == number]
