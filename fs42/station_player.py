@@ -42,6 +42,7 @@ def update_status_socket(
     awaiting_pin=False,
     pin_digits_entered=0,
     metadata=None,
+    previous_channel_available=False,
 ):
     status_obj = {
         "status": status,
@@ -50,6 +51,7 @@ def update_status_socket(
         "timestamp": datetime.datetime.now().strftime(timestamp),
         "awaiting_pin": awaiting_pin,
         "pin_digits_entered": pin_digits_entered,
+        "previous_channel_available": previous_channel_available,
     }
     if title is not None:
         status_obj["title"] = title
@@ -230,6 +232,7 @@ class StationPlayer:
             )
 
         self.station_config = station_config
+        self.previous_station_name = None
         # self.playlist = self.read_json(runtime_filepath)
         self.input_check_fn = input_check_fn
         self.index = 0
@@ -251,6 +254,11 @@ class StationPlayer:
 
     def show_text(self, text, duration=4):
         self.mpv.command("show-text", text, duration)
+
+    def update_status(self, *args, **kwargs):
+        update_status_socket(
+            *args, previous_channel_available=self.previous_station_name is not None, **kwargs
+        )
 
     def _update_playback_progress(self):
         now = time.monotonic()
@@ -396,7 +404,7 @@ class StationPlayer:
         entered = ""
         self.stop_player()
         self._start_parental_controls_overlay(network_name)
-        update_status_socket(
+        self.update_status(
             "playing",
             network_name,
             channel_number,
@@ -428,7 +436,7 @@ class StationPlayer:
 
                     entered += digit
                     self._update_parental_controls_overlay(len(entered), False)
-                    update_status_socket(
+                    self.update_status(
                         "playing",
                         network_name,
                         channel_number,
@@ -444,7 +452,7 @@ class StationPlayer:
 
                         entered = ""
                         self._update_parental_controls_overlay(0, True)
-                        update_status_socket(
+                        self.update_status(
                             "playing",
                             network_name,
                             channel_number,
@@ -456,7 +464,7 @@ class StationPlayer:
                 elif response.payload == "parental_clear":
                     entered = ""
                     self._update_parental_controls_overlay(0, False)
-                    update_status_socket(
+                    self.update_status(
                         "playing",
                         network_name,
                         channel_number,
@@ -466,7 +474,7 @@ class StationPlayer:
                     )
         finally:
             self._close_parental_controls_overlay()
-            update_status_socket(
+            self.update_status(
                 "idle",
                 network_name,
                 channel_number,
@@ -606,7 +614,7 @@ class StationPlayer:
                                 f"Could not read playback metadata: {e}"
                             )
 
-                    update_status_socket(
+                    self.update_status(
                         "playing",
                         self.station_config["network_name"],
                         self.station_config["channel_number"],
@@ -779,7 +787,7 @@ class StationPlayer:
         self.current_playing_file_path = file_path
 
         if self.station_config:
-            update_status_socket(
+            self.update_status(
                 "playing",
                 self.station_config["network_name"],
                 self.station_config["channel_number"],
@@ -834,7 +842,7 @@ class StationPlayer:
         self.current_playing_file_path = file_path
 
         if self.station_config:
-            update_status_socket(
+            self.update_status(
                 "playing",
                 self.station_config["network_name"],
                 self.station_config["channel_number"],
@@ -1020,7 +1028,7 @@ class StationPlayer:
             self.current_playing_file_path = None
 
         # update status
-        update_status_socket(
+        self.update_status(
             "playing",
             self.station_config["network_name"],
             self.station_config["channel_number"],
@@ -1081,7 +1089,7 @@ class StationPlayer:
         self.current_playing_file_path = None
 
         # update status
-        update_status_socket(
+        self.update_status(
             "playing",
             self.station_config["network_name"],
             self.station_config["channel_number"],

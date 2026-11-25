@@ -226,6 +226,12 @@ async def player_channel(channel: str):
     return {"command": command}
 
 
+@router.post("/channels/previous")
+async def player_previous_channel(request: Request):
+    connected_command_queue(request).put({"command": "previous"})
+    return {"status": "ok"}
+
+
 @router.post("/channels/guide")
 async def show_guide(request:Request):
     command_queue = connected_command_queue(request)
