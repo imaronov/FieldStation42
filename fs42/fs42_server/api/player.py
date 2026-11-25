@@ -439,101 +439,59 @@ async def _control_volume(action: str):
     return response
 
 async def _volume_amixer(action: str):
-    """Control volume using ALSA amixer (most common on Raspberry Pi)"""
-    mixer = "Master"
-
-    try:
-        if action == "up":
-            # Check current volume before increasing
-            get_status = subprocess.run(
-                [*AMIXER, "sget", mixer],
-                capture_output=True, text=True, check=True
-            )
-            current_vol_match = re.search(r'\[(\d+)%\]', get_status.stdout)
-            current_vol = int(current_vol_match.group(1)) if current_vol_match else 0
-
-            # Cap at 100%
-            if current_vol >= 100:
-                return {"action": action, "method": "amixer", "status": "capped", "message": "Volume already at maximum (100%)", "volume": "100%"}
-            elif current_vol > 100 - VOLUME_STEP:
-                # Set to exactly 100% if we're close
-                cmd = [*AMIXER, "sset", mixer, "100%"]
-                message = "Volume set to maximum (100%)"
-            else:
-                cmd = [*AMIXER, "sset", mixer, f"{VOLUME_STEP}%+"]
-                message = f"Volume increased by {VOLUME_STEP}%"
-        elif action == "down":
-            cmd = [*AMIXER, "sset", mixer, f"{VOLUME_STEP}%-"]
-            message = f"Volume decreased by {VOLUME_STEP}%"
-        elif action == "mute":
-            # For mute, we need to check current state and toggle
-            # First get current mute status
-            get_status = subprocess.run(
-                [*AMIXER, "sget", mixer],
-                capture_output=True, text=True, check=True
-            )
-            # Check if currently muted - look for [off] in output
-            is_muted = "[off]" in get_status.stdout
-
-            # Toggle: if muted, unmute; if unmuted, mute
-            mute_action = "unmute" if is_muted else "mute"
-            cmd = [*AMIXER, "sset", mixer, mute_action]
-            message = f"Mute {'off' if is_muted else 'on'}"
-        else:
-            raise ValueError(f"Invalid action: {action}")
-
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        # Try to extract volume level from amixer output
-        volume_level = _extract_amixer_volume(result.stdout)
-        return {"action": action, "method": "amixer", "status": "success", "message": message, "volume": volume_level}
-
-    except subprocess.CalledProcessError:
-        # If Master doesn't work, try PCM
+    """Control volume using ALSA amixer (most common on Raspberry Pi)."""
+    for mixer in ("Master", "PCM"):
         try:
-            mixer = "PCM"
+            current = subprocess.run(
+                [*AMIXER, "sget", mixer], capture_output=True, text=True, check=True
+            ).stdout
+            is_muted = "[off]" in current
+            status = "success"
             if action == "up":
-                # Check current volume before increasing
-                get_status = subprocess.run(
-                    [*AMIXER, "sget", mixer],
-                    capture_output=True, text=True, check=True
-                )
-                current_vol_match = re.search(r'\[(\d+)%\]', get_status.stdout)
-                current_vol = int(current_vol_match.group(1)) if current_vol_match else 0
-
-                # Cap at 100%
-                if current_vol >= 100:
-                    return {"action": action, "method": "amixer", "status": "capped", "message": "Volume already at maximum (100%)", "volume": "100%"}
-                elif current_vol > 100 - VOLUME_STEP:
-                    # Set to exactly 100% if we're close
-                    cmd = [*AMIXER, "sset", mixer, "100%"]
+                match = re.search(r"\[(\d+)%\]", current)
+                current_volume = int(match.group(1)) if match else 0
+                if current_volume >= 100:
+                    status = "capped"
+                    message = "Volume already at maximum (100%)"
+                    settings = []
+                elif current_volume > 100 - VOLUME_STEP:
                     message = "Volume set to maximum (100%)"
+                    settings = ["100%"]
                 else:
-                    cmd = [*AMIXER, "sset", mixer, f"{VOLUME_STEP}%+"]
                     message = f"Volume increased by {VOLUME_STEP}%"
+                    settings = [f"{VOLUME_STEP}%+"]
             elif action == "down":
-                cmd = [*AMIXER, "sset", mixer, f"{VOLUME_STEP}%-"]
                 message = f"Volume decreased by {VOLUME_STEP}%"
+                settings = [f"{VOLUME_STEP}%-"]
             elif action == "mute":
-                # For mute with PCM, check current state and toggle
-                get_status = subprocess.run(
-                    [*AMIXER, "sget", mixer],
-                    capture_output=True, text=True, check=True
-                )
-                is_muted = "[off]" in get_status.stdout
-                mute_action = "unmute" if is_muted else "mute"
-                cmd = [*AMIXER, "sset", mixer, mute_action]
                 message = f"Mute {'off' if is_muted else 'on'}"
+                settings = ["unmute" if is_muted else "mute"]
+            else:
+                raise ValueError(f"Invalid action: {action}")
 
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            volume_level = _extract_amixer_volume(result.stdout)
-            return {"action": action, "method": "amixer", "status": "success", "message": f"{message} (PCM)", "volume": volume_level}
-        except subprocess.CalledProcessError as e:
-            raise HTTPException(status_code=500, detail=f"ALSA amixer failed: {e.stderr}")
+            if action in ("up", "down") and is_muted:
+                settings.append("unmute")
+            if settings:
+                current = subprocess.run(
+                    [*AMIXER, "sset", mixer, *settings],
+                    capture_output=True, text=True, check=True,
+                ).stdout
+            if mixer == "PCM" and status != "capped":
+                message += " (PCM)"
+            return {
+                "action": action, "method": "amixer", "status": status,
+                "message": message, "volume": _extract_amixer_volume(current),
+            }
+        except subprocess.CalledProcessError as error:
+            if mixer == "PCM":
+                raise HTTPException(status_code=500, detail=f"ALSA amixer failed: {error.stderr}") from error
+
 
 
 async def _volume_pulseaudio(action: str):
     """Control volume using PulseAudio pactl"""
     try:
+        status = "success"
         if action == "up":
             # Check current volume before increasing
             current_volume_str = await _get_pulseaudio_volume()
@@ -542,7 +500,9 @@ async def _volume_pulseaudio(action: str):
 
             # Cap at 100% (PulseAudio uses 65536 as 100%)
             if current_vol >= 100:
-                return {"action": action, "method": "pulseaudio", "status": "capped", "message": "Volume already at maximum (100%)", "volume": "100%"}
+                cmd = None
+                status = "capped"
+                message = "Volume already at maximum (100%)"
             elif current_vol > 100 - VOLUME_STEP:
                 # Set to exactly 100%
                 cmd = ["pactl", "set-sink-volume", "@DEFAULT_SINK@", "100%"]
@@ -559,15 +519,23 @@ async def _volume_pulseaudio(action: str):
         else:
             raise ValueError(f"Invalid action: {action}")
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        if cmd:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+        if action in ("up", "down"):
+            subprocess.run(
+                ["pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"],
+                capture_output=True, text=True, check=True,
+            )
 
         # Get current volume and mute status after the change
         if action == "mute":
             volume_level = await _get_pulseaudio_mute_status()
+        elif status == "capped":
+            volume_level = "100%"
         else:
             volume_level = await _get_pulseaudio_volume()
 
-        return {"action": action, "method": "pulseaudio", "status": "success", "message": message, "volume": volume_level}
+        return {"action": action, "method": "pulseaudio", "status": status, "message": message, "volume": volume_level}
 
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"PulseAudio pactl failed: {e.stderr}")
@@ -590,7 +558,12 @@ async def _volume_wireplumber(action: str):
         else:
             raise ValueError(f"Invalid action: {action}")
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        if action in ("up", "down"):
+            subprocess.run(
+                ["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "0"],
+                capture_output=True, text=True, check=True,
+            )
 
         # Try to get current volume from wpctl
         volume = await _get_wireplumber_volume()
