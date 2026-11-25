@@ -312,7 +312,8 @@ async def play_file(channel_number: int, play_request: PlayFileRequest, request:
     # Create the command to send to the player
     command = {
         "command": "play_file",
-        "file_path": play_request.file_path
+        "file_path": play_request.file_path,
+        "channel_number": channel_number,
     }
 
     try:
