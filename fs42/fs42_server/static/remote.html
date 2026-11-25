@@ -114,6 +114,45 @@
 				font-weight: 700;
 				letter-spacing: 0.06em;
 			}
+			.station-picker {
+				box-sizing: border-box;
+				width: min(340px, calc(100% - 24px));
+				padding: 14px;
+				border: 1px solid #666;
+				border-radius: 12px;
+				background: #222;
+				color: #fff;
+			}
+			.station-picker::backdrop {
+				background: rgba(0, 0, 0, 0.65);
+			}
+			.station-picker-header {
+				display: flex;
+				justify-content: space-between;
+				align-items: center;
+				gap: 12px;
+			}
+			.station-picker-header h2 {
+				margin: 0;
+				font-size: 18px;
+			}
+			.station-picker-list {
+				display: grid;
+				gap: 6px;
+				max-height: 55vh;
+				overflow: auto;
+				margin: 10px 0 0;
+				padding: 2px;
+				border: 0;
+			}
+			.station-picker-list button {
+				min-height: 44px;
+				text-align: left;
+				white-space: normal;
+			}
+			.station-picker-list button[aria-current="true"] {
+				box-shadow: inset 0 0 0 2px #4caf50;
+			}
 			#playback-controls {
 				display: grid !important;
 				grid-column: 1 / -1;
@@ -706,8 +745,20 @@
 					SUBS
 				</button>
 				<button class="remote-btn function-btn" data-key="audio">AUDIO</button>
+				<button class="remote-btn function-btn" data-key="stations" aria-haspopup="dialog">STATIONS</button>
 			</div>
 		</div>
+
+		<dialog class="station-picker" id="station-picker" aria-labelledby="station-picker-title">
+			<div class="station-picker-header">
+				<h2 id="station-picker-title">Stations</h2>
+				<form method="dialog">
+					<button class="pure-button" autofocus>Close</button>
+				</form>
+			</div>
+			<div id="station-picker-status" role="status"></div>
+			<fieldset class="station-picker-list" id="station-picker-list" aria-label="Configured channels"></fieldset>
+		</dialog>
 
 		<script>
 			// Basic remote control functionality
@@ -1390,6 +1441,58 @@
 				}
 			}
 
+			const stationPicker = document.getElementById('station-picker');
+			const stationPickerStatus = document.getElementById('station-picker-status');
+			const stationPickerList = document.getElementById('station-picker-list');
+
+			async function openStationPicker() {
+				if (stationPicker.open || stationPickerList.disabled) return;
+				stationPickerList.replaceChildren();
+				stationPickerList.disabled = true;
+				stationPickerStatus.textContent = 'Loading stations…';
+				stationPicker.showModal();
+				try {
+					const { channels } = await window.fs42Api.get('summary/channels');
+					const stations = channels
+						.filter(station => Number.isInteger(station.channel_number) && station.channel_number >= 0)
+						.sort((a, b) => a.channel_number - b.channel_number);
+					stationPickerStatus.textContent = stations.length ? '' : 'No configured channels.';
+					for (const station of stations) {
+						const button = document.createElement('button');
+						const channel = String(station.channel_number).padStart(3, '0');
+						button.type = 'button';
+						button.className = 'pure-button';
+						button.textContent = `${channel} · ${station.network_long_name || station.network_name}`;
+						if (channel === currentChannel) button.setAttribute('aria-current', 'true');
+						button.addEventListener('click', () => tuneFromStationPicker(station.channel_number));
+						stationPickerList.append(button);
+					}
+				} catch (error) {
+					stationPickerStatus.textContent = error.detail || 'Could not load stations.';
+				} finally {
+					stationPickerList.disabled = false;
+				}
+			}
+
+			async function tuneFromStationPicker(channel) {
+				if (stationPickerList.disabled) return;
+				stationPickerList.disabled = true;
+				stationPickerStatus.textContent = 'Changing channel…';
+				clearTimeout(channelInputTimeout);
+				channelInputTimeout = null;
+				channelInput = '';
+				isInputtingChannel = false;
+				try {
+					await window.fs42Api.get(`player/channels/${channel}`);
+					display.textContent = `CH ${String(channel).padStart(3, '0')}`;
+					stationPicker.close();
+				} catch (error) {
+					stationPickerStatus.textContent = error.detail || 'Could not change channel.';
+				} finally {
+					stationPickerList.disabled = false;
+				}
+			}
+
 			// Button press handler
 			document.querySelectorAll('.remote-btn').forEach((btn) => {
 				btn.addEventListener('click', function () {
@@ -1406,6 +1509,9 @@
 
 			async function handleRemoteCommand(key) {
 				switch (key) {
+					case 'stations':
+						await openStationPicker();
+						return;
 					case 'services_shutdown':
 						await shutdownSystem();
 						break;
