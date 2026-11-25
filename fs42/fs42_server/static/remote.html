@@ -17,6 +17,61 @@
 		/>
 		<link rel="stylesheet" id="theme-css" href="/static/themes/default.css" />
 		<style>
+			@font-face {
+				font-family: 'DSEG14 Classic Mini';
+				src:
+					local('DSEG14 Classic Mini Regular'),
+					local('DSEG14ClassicMini-Regular'),
+					url('/static/fonts/DSEG14ClassicMini-Regular.ttf') format('truetype');
+				font-display: swap;
+			}
+			#remote-display,
+			.playback-timeline-values {
+				font-family: 'DSEG14 Classic Mini', 'Courier New', monospace;
+			}
+			#remote-display {
+				background: #9caf4a;
+				color: #182214;
+				text-shadow: none;
+			}
+			.remote-display-readout {
+				display: grid;
+				min-width: 0;
+				white-space: pre-wrap;
+				overflow-wrap: anywhere;
+			}
+			.remote-display-readout > span,
+			.remote-display-readout.has-segments::before {
+				grid-area: 1 / 1;
+			}
+			.remote-display-readout.has-segments::before {
+				content: attr(data-unlit) / '';
+			}
+			.remote-display-readout.has-segments::before,
+			.remote-display-fill::before {
+				color: rgba(24, 34, 20, 0.12);
+				pointer-events: none;
+			}
+			.remote-display-fill {
+				position: relative;
+				flex: 1 1 0;
+				min-width: 0;
+				align-self: stretch;
+				overflow: hidden;
+				pointer-events: none;
+			}
+			.remote-display-fill::before {
+				content: attr(data-unlit);
+				position: absolute;
+				top: 50%;
+				left: 0;
+				transform: translateY(-50%);
+				white-space: nowrap;
+			}
+			.remote-display-fill:first-child::before {
+				right: 0;
+				left: auto;
+			}
 			html,
 			body {
 				touch-action: manipulation;
@@ -329,10 +384,12 @@
 				margin: 0;
 				min-height: 0;
 			}
-			.remote-container[data-layout='mobile'],
-			.remote-container[data-layout='mobile'] :is(.remote-screen, .now-playing) {
+			.remote-container[data-layout='mobile'] {
 				background: transparent;
 				box-shadow: none;
+			}
+			.remote-container[data-layout='mobile'] .now-playing {
+				background: #000;
 			}
 			.remote-container[data-layout='mobile'] {
 				box-sizing: border-box;
@@ -604,7 +661,13 @@
 				</button>
 			</div>
 
-			<div class="remote-screen" id="remote-display">Ready</div>
+			<div class="remote-screen" id="remote-display">
+				<span class="remote-display-fill" aria-hidden="true"></span>
+				<span class="remote-display-readout"
+					><span id="remote-display-text">Ready</span></span
+				>
+				<span class="remote-display-fill" aria-hidden="true"></span>
+			</div>
 
 			<!-- Number Pad -->
 			<div class="button-grid number-pad" id="number-pad">
@@ -1051,7 +1114,30 @@
 			});
 
 			// Basic remote control functionality
-			const display = document.getElementById('remote-display');
+			const display = document.getElementById('remote-display-text');
+			const displayReadout = display.parentElement;
+			function updateUnlitSegments() {
+				displayReadout.dataset.unlit = display.textContent.replace(
+					/[a-z0-9]/gi,
+					'~',
+				);
+			}
+			updateUnlitSegments();
+			new MutationObserver(updateUnlitSegments).observe(display, {
+				childList: true,
+				characterData: true,
+				subtree: true,
+			});
+			document.fonts.load('14px "DSEG14 Classic Mini"', '~').then(
+				(fonts) => {
+					if (!fonts.length) return;
+					displayReadout.classList.add('has-segments');
+					for (const fill of displayReadout.parentElement.querySelectorAll('.remote-display-fill')) {
+						fill.dataset.unlit = '~'.repeat(80);
+					}
+				},
+				() => {},
+			);
 			const nowPlayingNetwork = document.getElementById('now-playing-network');
 			const nowPlayingStatus = document.getElementById('now-playing-status');
 			const nowPlayingTitle = document.getElementById('now-playing-title');

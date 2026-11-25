@@ -1,4 +1,6 @@
 
+apt-get install fonts-dseg
+
 apt-get install libwebp7
 ln -s /usr/lib/aarch64-linux-gnu/libwebp.so.7 /usr/lib/aarch64-linux-gnu/libwebp.so.6
 
