@@ -30,6 +30,7 @@
 	const detailsClose = document.getElementById('details-close');
 	const detailsPoster = document.getElementById('details-poster');
 	const detailsType = document.getElementById('details-type');
+	const detailsShowName = document.getElementById('details-show-name');
 	const detailsTitle = document.getElementById('details-title');
 	const detailsMeta = document.getElementById('details-meta');
 	const detailsDescription = document.getElementById('details-description');
@@ -548,6 +549,9 @@
 		detailItem = null;
 		modal.classList.remove('item-detail-open', 'episode-detail-open');
 		detailsType.textContent = 'SERIES';
+		detailsShowName.hidden = true;
+		detailsMeta.hidden = false;
+		detailsPoster.onerror = null;
 		detailsPlay.hidden = true;
 		detailsEpisodeSidebar.hidden = true;
 		seasonTabs.hidden = false;
@@ -561,7 +565,8 @@
 
 		detailsTitle.textContent = openShow.title;
 		detailsMeta.innerHTML = metadataParts(openShow).join('<span>•</span>');
-		detailsDescription.textContent = openShow.description || 'Choose an episode to play.';
+		detailsDescription.textContent = openShow.description || '';
+		detailsDescription.hidden = !detailsDescription.textContent.trim();
 		setImage(detailsPoster, openShow.image_url, `${openShow.title} poster`);
 		seasonTabs.replaceChildren();
 		seasons.forEach((entry, index) => {
@@ -643,6 +648,31 @@
 		renderShowDetails();
 	}
 
+	function setEpisodeImage(item, tvmazeImage) {
+		const images = [tvmazeImage, item.screenshot_url, item.image_url].filter(Boolean);
+		function showNextImage() {
+			const image = images.shift();
+			detailsPoster.onerror = images.length ? showNextImage : null;
+			setImage(detailsPoster, image, `${item.title} screenshot`);
+		}
+		showNextImage();
+	}
+
+	async function loadEpisodeMetadata(item) {
+		const query = item.tvmaze_query || item.show_title;
+		let metadata;
+		if (query && Number.isInteger(item.episode) && item.episode > 0) {
+			const params = new URLSearchParams({ show: query, season: item.season ?? 0, number: item.episode });
+			try {
+				metadata = await window.fs42Api.get(`media-browser/${channelNumber}/episode-metadata?${params}`);
+			} catch (_) {
+				// Local metadata and artwork remain available when TVmaze has no match.
+			}
+		}
+		if (detailItem !== item || modal.hidden) return;
+		setEpisodeImage(item, metadata?.image_url);
+	}
+
 	function openItemDetails(item) {
 		if (!item) return;
 		detailItem = item;
@@ -650,11 +680,18 @@
 		const isEpisode = item.type === 'episode' && Boolean(openShow);
 		modal.classList.toggle('episode-detail-open', isEpisode);
 		modal.hidden = false;
-		detailsType.textContent = item.type === 'episode' ? 'EPISODE' : 'FILM';
+		detailsShowName.hidden = !isEpisode;
+		detailsShowName.textContent = isEpisode ? item.show_title || openShow.title : '';
+		detailsType.textContent = isEpisode
+			? `SEASON ${item.season ?? 0} · EPISODE ${item.episode || episodeIndex + 1}`
+			: 'FILM';
 		detailsTitle.textContent = item.tmdb_title || item.title;
 		detailsMeta.innerHTML = metadataParts(item).join('<span>•</span>');
-		detailsDescription.textContent = item.description || 'No description is available.';
-		setImage(detailsPoster, item.image_url, `${item.title} poster`);
+		detailsMeta.hidden = isEpisode;
+		detailsDescription.hidden = true;
+		detailsPoster.onerror = null;
+		setImage(detailsPoster, item.image_url, `${item.title} ${isEpisode ? 'artwork' : 'poster'}`);
+		if (isEpisode) loadEpisodeMetadata(item);
 		detailsPlay.hidden = false;
 		detailsEpisodeSidebar.hidden = !isEpisode;
 		if (isEpisode) {

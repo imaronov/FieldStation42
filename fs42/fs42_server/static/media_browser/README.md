@@ -102,7 +102,35 @@ Movie cards use a same-name local poster first. When local artwork or metadata i
 | OK | Apply the selected Library section, open movie details, open a show, open episode details, or activate Play in a detail view. |
 | Back | Return from item details to the episode browser or library, close show details, or return from a Movies or TV Shows grid to Home. |
 
+## Episode order
+
+Normalize Naming and MyFlix use TVmaze's aired order by default. If a library
+uses a different order, choose the order for that show in `confs/main_config.json`.
+Entries are keyed by the show's TVmaze ID. The lookup uses the chosen order;
+the library's season and episode codes stay in the filenames and on screen.
+
+- Use `{"tvmaze_list_id": 123}` with the ID of an alternate list returned by
+  TVmaze's `/shows/{show_id}/alternatelists` endpoint.
+- Use `{"tvdb_order": "alternate"}` for TheTVDB's alternate order when the
+  show has a linked TheTVDB record. Add `tvdb_api_key` and, if required by the
+  key, `tvdb_pin` to the same config. Episode titles are resolved in that order;
+  MyFlix cross-references TVmaze by title and air date for still images.
+
+For example, for the American Dad! Streaming Order, merge the following into
+the existing config and restart the Web UI service.
+
+```json
+{
+  "tvdb_api_key": "YOUR_TVDB_V4_API_KEY",
+  "episode_orders": {
+    "215": { "tvdb_order": "alternate" }
+  }
+}
+```
+
 ## API
+
+Episode summaries and still images are provided by [TVmaze](https://www.tvmaze.com/).
 
 - `GET /media-browser/{channel_number}` builds the configured rows and show hierarchy.
 - `GET /media-browser/{channel_number}/art/{library_id}/{path}` serves nested artwork from a configured library.

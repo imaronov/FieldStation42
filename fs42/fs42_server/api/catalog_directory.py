@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from requests import RequestException
 
 from fs42.fs42_server.api.media import AUDIO_EXTENSIONS, PROJECT_ROOT, VIDEO_EXTENSIONS
+from fs42.station_manager import StationManager
 from .tmdb_helper import get_tmdb_helper
 from . import tvmaze_helper
 
@@ -383,12 +384,16 @@ def _tvmaze_episode_name(source, stem, episode):
     try:
         queries = [folder_title]
         if episode:
-            numbers = re.fullmatch(r"S(\d+)E(\d+)", episode.group(1), re.I)
+            code = episode.group(1)
+            numbers = re.fullmatch(r"S(\d+)E(\d+)", code, re.I) or re.fullmatch(r"(\d+)x(\d+)", code, re.I)
             if not numbers:
                 raise HTTPException(status_code=400, detail="A file containing multiple episodes has no single episode title.")
             season, number = map(int, numbers.groups())
+            prefix = stem[:episode.start()].strip(" ._-").rstrip("[(").rstrip()
+            remix_prefix = re.sub(r"\s*\(\d{4}\)\s*$", "", prefix)
+            is_remix = bool(re.search(r"(?:^|[ ._-])remix$", remix_prefix, re.I))
             if not season_folder:
-                queries.append(stem[:episode.start()].strip(" ._-"))
+                queries.append(re.sub(r"[ ._-]+remix(?=\s*\(\d{4}\)$|$)", "", prefix, flags=re.I).replace(".", " "))
 
         for query in dict.fromkeys(filter(None, queries)):
             matches = tvmaze_helper.search_shows(query)
@@ -404,23 +409,39 @@ def _tvmaze_episode_name(source, stem, episode):
         if not re.fullmatch(r"\d{4}", year):
             raise HTTPException(status_code=404, detail=f"TVmaze has no premiere year for {show['name']}.")
 
+        config = StationManager().server_conf
         if episode:
-            result = tvmaze_helper.get_episode(show["id"], season, number)
+            if is_remix and not re.search(r"\bremix$", show["name"], re.I):
+                # A recut can reuse an aired episode code for a different title.
+                title = stem[episode.end():].lstrip("] )-._")
+                release_tag = re.search(
+                    r"[ ._-]+(?:\d{3,4}[pi]|web[ ._-]?(?:dl|rip)|blu[ ._-]?ray|hdtv|x26[45]|hevc)(?=$|[ ._-])",
+                    title, re.I,
+                )
+                if release_tag:
+                    title = title[:release_tag.start()]
+                title = " ".join(title.replace(".", " ").replace("_", " ").split())
+                if not title:
+                    raise HTTPException(status_code=404, detail="This remix filename needs an episode title after its episode code.")
+                return f"{show['name']} Remix", year, f"S{season:02d}E{number:02d}", title
+            result = tvmaze_helper.get_episode(show, season, number, config)
             if result and result.get("name"):
                 return show["name"], year, f"S{season:02d}E{number:02d}", result["name"]
-            raise HTTPException(status_code=404, detail=f"TVmaze has no episode for {folder_title} {episode.group(1).upper()}.")
+            raise HTTPException(status_code=404, detail=f"No episode for {folder_title} {episode.group(1).upper()} in the selected order. Check episode_orders in main_config.json.")
 
         season = int(season_folder[1])
         title = re.sub(r"\s+\(\d{4}\)$", "", stem.strip(" ._-"))
-        candidates = [item for item in tvmaze_helper.list_episodes(show["id"])
-                      if item.get("season") == season and item.get("number") is not None
+        candidates = [item for item in tvmaze_helper.season_episodes(show, season, config)
+                      if type(item.get("number")) is int
                       and item.get("name") and tvmaze_helper.title_key(item["name"]) == tvmaze_helper.title_key(title)]
         if len(candidates) == 1:
             item = candidates[0]
             return show["name"], year, f"S{season:02d}E{item['number']:02d}", item["name"]
-        raise HTTPException(status_code=404, detail=f"No unique TVmaze episode title match in {folder_title} season {season}.")
+        raise HTTPException(status_code=404, detail=f"No unique episode title match in {folder_title} season {season} in the selected order.")
+    except tvmaze_helper.EpisodeOrderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RequestException as exc:
-        raise HTTPException(status_code=502, detail="TVmaze episode lookup failed. Try again later.") from exc
+        raise HTTPException(status_code=502, detail="Episode provider lookup failed. Check credentials and connection.") from exc
 
 
 def _safe_media_title(title):
@@ -435,7 +456,10 @@ def preview_tmdb_name(request: CheckTMDBRequest):
     if not extension and re.fullmatch(r"(?:season|series)[ ._-]*\d+|specials", stem, re.I):
         raise HTTPException(status_code=400, detail="Select the show folder instead of a season folder.")
 
-    episode = re.search(r"(?<![a-z0-9])(S\d{1,3}E\d{1,3}(?:E\d{1,3}|-E?\d{1,3})*)(?!\d)", stem, re.I) if extension else None
+    episode = re.search(
+        r"(?<![a-z0-9])(S\d{1,3}E\d{1,3}(?:E\d{1,3}|-E?\d{1,3})*(?!\d)|\d{1,3}x\d{1,3}(?:x\d{1,3})*(?![a-z0-9]))",
+        stem, re.I,
+    ) if extension else None
     in_season = extension and re.fullmatch(r"season[ ._-]*\d+", os.path.basename(os.path.dirname(source)), re.I)
     if episode or in_season:
         series, year, code, title = _tvmaze_episode_name(source, stem, episode)

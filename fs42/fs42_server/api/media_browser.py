@@ -4,15 +4,18 @@ import os
 import re
 import subprocess
 from functools import lru_cache
+from html.parser import HTMLParser
 from math import isfinite
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+from requests import RequestException
 
 from fs42.nfo_agent import NFOAgent
 from fs42.station_manager import StationManager
 from .tmdb_helper import TMDB_MOVIE_GENRES, get_tmdb_helper
+from . import tvmaze_helper
 
 
 router = APIRouter(prefix="/media-browser", tags=["media-browser"])
@@ -184,17 +187,20 @@ def _scan_show_directory(channel_number, library, show_directory, loose_files=No
         metadata, fields = _read_nfo(path)
         season_number, episode_number = _episode_numbers(metadata, path)
         episode_item = _media_item(path, channel_number, library)
+        relative_path = quote(os.path.relpath(path, library["path"]).replace(os.sep, "/"), safe="/")
+        media_url = f"{library['id']}/{relative_path}"
+        series = metadata.get("show_title") or show_title
+        filename_series = re.match(r"(.+ \(\d{4}\)) - S\d{1,3}E\d{1,3}(?: - |\.)", os.path.basename(path), re.I)
         episode_item.update(
             {
                 "type": "episode",
-                "show_title": metadata.get("show_title") or show_title,
+                "show_title": series,
+                "tvmaze_query": filename_series[1] if filename_series else series,
                 "season": season_number,
                 "episode": episode_number,
                 "title": fields.get("title") or _episode_title_from_filename(path),
-                "runtime_url": (
-                    f"/media-browser/{channel_number}/runtime/{library['id']}/"
-                    + quote(os.path.relpath(path, library["path"]).replace(os.sep, "/"), safe="/")
-                ),
+                "runtime_url": f"/media-browser/{channel_number}/runtime/{media_url}",
+                "screenshot_url": f"/media-browser/{channel_number}/screenshot/{media_url}",
             }
         )
         seasons.setdefault(season_number, []).append(episode_item)
@@ -349,8 +355,7 @@ def _runtime_minutes(path, modified_ns, size):
     return max(1, int(seconds / 60 + 0.5)) if isfinite(seconds) and seconds > 0 else None
 
 
-@router.get("/{channel_number}/runtime/{library_id}/{video_path:path}")
-def get_episode_runtime(channel_number: int, library_id: str, video_path: str):
+def _episode_video_path(channel_number, library_id, video_path):
     station = StationManager().station_by_channel(channel_number)
     library = next((entry for entry in configured_libraries(station or {})
                     if entry["id"] == library_id and entry["kind"] == "shows"), None)
@@ -365,11 +370,93 @@ def get_episode_runtime(channel_number: int, library_id: str, video_path: str):
         is_inside_library = False
     if not is_inside_library or not _is_video_file(candidate) or not os.path.isfile(candidate):
         raise HTTPException(status_code=404, detail="Episode not found")
+    return candidate
+
+
+@router.get("/{channel_number}/runtime/{library_id}/{video_path:path}")
+def get_episode_runtime(channel_number: int, library_id: str, video_path: str):
+    candidate = _episode_video_path(channel_number, library_id, video_path)
     try:
         stat = os.stat(candidate)
     except OSError as exc:
         raise HTTPException(status_code=404, detail="Episode not found") from exc
     return {"minutes": _runtime_minutes(candidate, stat.st_mtime_ns, stat.st_size)}
+
+
+@lru_cache(maxsize=128)
+def _episode_screenshot(path, modified_ns, size):
+    try:
+        for position in (30, 0):
+            result = subprocess.run(
+                ["ffmpeg", "-v", "error", "-nostdin", "-protocol_whitelist", "file",
+                 "-format_whitelist", "mov,matroska,avi,asf,flv", "-ss", str(position),
+                 "-i", path, "-map", "0:V:0", "-frames:v", "1",
+                 "-vf", "scale=640:360:force_original_aspect_ratio=decrease",
+                 "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1"],
+                capture_output=True, check=True, timeout=5,
+            )
+            if result.stdout:
+                return result.stdout
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+@router.get("/{channel_number}/screenshot/{library_id}/{video_path:path}")
+def get_episode_screenshot(channel_number: int, library_id: str, video_path: str):
+    candidate = _episode_video_path(channel_number, library_id, video_path)
+    try:
+        stat = os.stat(candidate)
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="Episode not found") from exc
+    jpeg = _episode_screenshot(candidate, stat.st_mtime_ns, stat.st_size)
+    if jpeg is None:
+        raise HTTPException(status_code=404, detail="Episode screenshot unavailable")
+    return Response(jpeg, media_type="image/jpeg")
+
+
+def _tvmaze_summary_text(summary):
+    parts = []
+
+    class SummaryParser(HTMLParser):
+        def handle_data(self, data):
+            parts.append(data)
+
+        def handle_starttag(self, tag, attrs):
+            if tag in {"p", "br", "div", "li"}:
+                parts.append(" ")
+
+    SummaryParser().feed(summary or "")
+    return " ".join("".join(parts).split())
+
+
+@router.get("/{channel_number}/episode-metadata")
+def get_episode_metadata(channel_number: int, show: str, season: int, number: int):
+    manager = StationManager()
+    if manager.station_by_channel(channel_number) is None:
+        raise HTTPException(status_code=404, detail=f"Channel {channel_number} not found")
+    if not show.strip() or len(show) > 300 or not 0 <= season <= 999 or not 1 <= number <= 999:
+        raise HTTPException(status_code=400, detail="A valid show, season and episode number are required")
+
+    try:
+        matches = tvmaze_helper.search_shows(show.strip())
+        episode = tvmaze_helper.get_episode(
+            matches[0], season, number, manager.server_conf, include_metadata=True,
+        ) if len(matches) == 1 else None
+    except tvmaze_helper.EpisodeOrderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (RequestException, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="Episode provider lookup failed") from exc
+    if not episode:
+        raise HTTPException(status_code=404, detail="No unique TVmaze episode match")
+
+    image = episode.get("image") or {}
+    image_url = image.get("original") or image.get("medium")
+    return {
+        "description": _tvmaze_summary_text(episode.get("summary")),
+        "image_url": image_url if image_url and image_url.startswith("https://static.tvmaze.com/") else None,
+        "source_url": f"https://www.tvmaze.com/episodes/{episode['id']}" if episode.get("id") else None,
+    }
 
 
 @router.get("/{channel_number}/tmdb")

@@ -504,10 +504,6 @@ button {
 	padding: clamp(42px, 7vw, 110px);
 }
 
-.item-detail-open .details-summary img {
-	max-height: 76vh;
-}
-
 .item-detail-open .details-summary > div {
 	max-height: 80vh;
 	overflow-y: auto;
@@ -522,6 +518,32 @@ button {
 .episode-detail-open .details-summary {
 	grid-column: 1;
 	grid-row: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: clamp(12px, 2vh, 24px);
+	min-height: 0;
+	padding: clamp(28px, 5vh, 60px) clamp(20px, 4vw, 64px);
+	overflow-y: auto;
+}
+
+.episode-detail-open .details-summary img {
+	flex-shrink: 0;
+	border-radius: 6px;
+}
+
+.episode-detail-open .details-summary > div {
+	flex-shrink: 0;
+	width: 100%;
+	max-height: none;
+	overflow: visible;
+}
+
+.details-show-name {
+	margin-bottom: 0.4em;
+	color: #e6e6e6;
+	font-size: clamp(1rem, 1.7vw, 1.5rem);
+	font-weight: 700;
 }
 
 .details-episode-sidebar {
@@ -605,9 +627,10 @@ button {
 
 .details-summary img {
 	width: 100%;
-	max-height: 32vh;
-	object-fit: contain;
-	object-position: top;
+	height: auto;
+	max-height: 33vh;
+	object-fit: cover;
+	object-position: center;
 }
 
 .details-summary img:not([src]) {
@@ -617,10 +640,18 @@ button {
 	margin: 0.15em 0 0.3em;
 	font-size: clamp(1.7rem, 3vw, 3.2rem);
 }
-.details-summary p {
+
+#details-description {
 	margin-bottom: 0;
 	color: #d2d2d2;
 	line-height: 1.45;
+}
+
+.resolution-480i #details-description:not([hidden]) {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 4;
+	overflow: hidden;
 }
 
 .details-play {
@@ -914,9 +945,9 @@ button {
 .resolution-480i .details-summary h2 {
 	font-size: 22px;
 }
-.resolution-480i .details-summary p,
+.resolution-480i #details-description,
 .resolution-480i .details-meta {
-	font-size: 8px;
+	font-size: 9px;
 }
 .resolution-480i .season-tabs {
 	min-height: 52px;
@@ -958,9 +989,6 @@ button {
 	height: 100%;
 	padding: 30px 42px;
 }
-.details-modal.resolution-480i.item-detail-open .details-summary img {
-	max-height: 390px;
-}
 .details-modal.resolution-480i.item-detail-open .details-summary > div {
 	max-height: 420px;
 }
@@ -969,6 +997,13 @@ button {
 }
 .details-modal.resolution-480i.episode-detail-open .details-card {
 	grid-template-columns: minmax(0, 1fr) 210px;
+}
+.details-modal.resolution-480i.episode-detail-open .details-summary {
+	gap: 12px;
+	padding: 20px 18px;
+}
+.details-modal.resolution-480i.episode-detail-open .details-summary > div {
+	max-height: none;
 }
 .details-modal.resolution-480i .details-episode-sidebar {
 	padding: 28px 12px 12px;
