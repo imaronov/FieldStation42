@@ -319,18 +319,70 @@ function stopScrolling() {
 	}
 }
 
-async function buildGuide() {
+async function loadScrollStrip() {
 	const slots = computeSlotTimes();
 	const schedules = MOCK
 		? mockFetchAllSchedules(slots)
 		: await fetchAllSchedules(slots);
+	return buildScrollStrip(slots, schedules);
+}
+
+async function buildGuide() {
 	const listings = document.getElementById('guide-listings');
 	if (COMPACT && !stations.length) {
 		listings.textContent = 'No channels available.';
 		return;
 	}
-	listings.innerHTML = '';
-	listings.appendChild(buildScrollStrip(slots, schedules));
+	listings.replaceChildren(await loadScrollStrip());
+}
+
+function startLoopingScroll(listings, strip, pxPerMs, initialPause) {
+	const cycle = document.createElement('div');
+	cycle.append(...strip.children);
+	strip.replaceChildren(cycle);
+	strip.classList.add('looping');
+
+	let cycleHeight = 0;
+	function updateCopies() {
+		cycleHeight = cycle.getBoundingClientRect().height;
+		strip.replaceChildren(cycle);
+		if (!cycleHeight) return;
+		const copies = Math.max(1, Math.ceil(listings.clientHeight / cycleHeight));
+		for (let i = 0; i < copies; i++) {
+			const copy = cycle.cloneNode(true);
+			copy.setAttribute('aria-hidden', 'true');
+			strip.appendChild(copy);
+		}
+	}
+	updateCopies();
+	const resizeObserver = new ResizeObserver(updateCopies);
+	resizeObserver.observe(cycle);
+	resizeObserver.observe(listings);
+
+	let offset = 0;
+	let lastTime = performance.now() + initialPause;
+	let refreshAt = lastTime + 30_000;
+	function tick(now) {
+		if (now >= refreshAt) {
+			refreshAt = Infinity;
+			loadScrollStrip()
+				.then((next) => {
+					cycle.replaceChildren(...next.children);
+					updateCopies();
+				})
+				.catch((error) => console.error('Could not refresh the scrolling guide:', error))
+				.finally(() => {
+					refreshAt = performance.now() + 30_000;
+				});
+		}
+		if (now >= lastTime && cycleHeight) {
+			offset = (offset + pxPerMs * (now - lastTime)) % cycleHeight;
+			strip.style.transform = `translateY(-${offset}px)`;
+			lastTime = now;
+		}
+		animFrame = requestAnimationFrame(tick);
+	}
+	animFrame = requestAnimationFrame(tick);
 }
 
 function startScrolling() {
@@ -342,10 +394,14 @@ function startScrolling() {
 
 	const pxPerMs = getScrollSpeed() / 50;
 	const pauseMs = getPauseDuration();
+	if ((COMPACT || LOOP) && stations.length) {
+		startLoopingScroll(listings, strip, pxPerMs, COMPACT ? 250 : pauseMs);
+		return;
+	}
 
 	scrollY = 0;
 	strip.style.transform = 'translateY(0)';
-	pauseUntil = performance.now() + (COMPACT ? 250 : pauseMs);
+	pauseUntil = performance.now() + pauseMs;
 
 	let lastTime = null;
 

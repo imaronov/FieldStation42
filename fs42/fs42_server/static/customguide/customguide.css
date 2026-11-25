@@ -92,6 +92,10 @@ body {
   flex-shrink: 0;
 }
 
+#guide-header[hidden] {
+  display: none;
+}
+
 #guide-wrapper.header-bottom #guide-header {
   order: 2;
 }
@@ -114,6 +118,10 @@ body {
 
 #guide-scroll-strip {
   padding: 0.5em var(--h-padding, 1em) var(--v-padding, 0.5em);
+}
+
+#guide-scroll-strip.looping {
+  padding-block: 0;
 }
 
 .time-slot-heading {
@@ -174,18 +182,15 @@ body {
   color: var(--show-title-color);
 }
 
+/* Continued indicator appended via CSS */
+.listing-row.continued .show-title::after {
+  content: var(--continued-indicator);
+  opacity: 0.7;
+}
+
 html.compact-guide {
   --font-size: 11px;
   --h-padding: 6px;
-  --v-padding: 4px;
-}
-
-#guide-header[hidden] {
-  display: none;
-}
-
-.compact-guide #guide-scroll-strip {
-  padding-block: var(--v-padding);
 }
 
 .compact-guide .listing-row .channel-info {
@@ -204,17 +209,20 @@ html.compact-guide {
   white-space: nowrap;
 }
 
-/* Continued indicator appended via CSS */
-.listing-row.continued .show-title::after {
-  content: var(--continued-indicator);
-  opacity: 0.7;
-}
-
 /* ===== GRID LAYOUT (90s / 00s themes) ===== */
 
 #guide-listings.grid-mode {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  padding-inline: min(0px, 5vw);
+}
+
+/* Sets padding for CRT screen  */
+@media (height < 500px) {
+  #guide-listings.grid-mode {
+    padding-inline: 40px;
+  }
 }
 
 #top-panel {
@@ -334,11 +342,13 @@ html.compact-guide {
 
 #grid-listings {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
   position: relative;
 }
 
-#grid-scroll-strip {
+#grid-scroll-strip,
+#grid-scroll-strip-clone {
   position: absolute;
   top: 0;
   left: 0;
@@ -371,7 +381,6 @@ html.compact-guide {
   align-items: center;
   padding: 0 0.4em;
   margin: var(--channel-pill-margin-v, 0) var(--channel-pill-margin-h, 0);
-  margin-left: calc(var(--channel-pill-margin-left, 0));
   border-radius: var(--channel-pill-radius, 0);
   background-color: var(--grid-channel-bg, #0a0018);
   box-shadow: inset 3px 3px 0 var(--channel-block-border, var(--program-block-border, transparent)),
